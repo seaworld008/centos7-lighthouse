@@ -38,7 +38,7 @@ repos)
   mkdir -p /etc/yum.repos.d/disabled-for-upgrade; cp -a /etc/yum.repos.d "$BK/yum.repos.d.orig.$(date +%s)"
   # 所有 CentOS 官方 repo 文件（含各种改名副本/重复定义）全部挪走，换成一个统一文件
   for f in /etc/yum.repos.d/*.repo; do
-    case "$(basename "$f")" in docker-ce.repo) continue;; esac
+    case "$(basename "$f")" in docker-ce.repo) continue;; CentOS-*.repo) mv "$f" /etc/yum.repos.d/disabled-for-upgrade/; continue;; esac
     grep -qiE '^\[(base|updates|extras|centosplus|contrib|fasttrack|cr|epel)\]|mirrorlist\.centos\.org|/centos/(\$releasever|7)/(os|updates|extras)|centos-vault|/epel/' "$f" && mv "$f" /etc/yum.repos.d/disabled-for-upgrade/
   done
   mv /etc/yum.repos.d/*.bak /etc/yum.repos.d/*.backup /etc/yum.repos.d/disabled-for-upgrade/ 2>/dev/null
@@ -65,14 +65,20 @@ EOF
     else echo "WARN: EPEL7 归档 $E7 不可用，EPEL 暂时不启用"; fi
   fi
   [ -f /etc/yum.repos.d/docker-ce.repo ] && sed -i -E "s#https?://download\.docker\.com#$DK#" /etc/yum.repos.d/docker-ce.repo
-  # 其它第三方源：逐个探测，不可用的禁用（否则 yum/leapp 会卡住或失败）
-  yum clean all >/dev/null 2>&1
-  for id in $(yum repolist enabled 2>/dev/null | awk 'f&&NF>1{sub(/^!/,"",$1); sub(/\/.*/,"",$1); print $1} /^repo id/{f=1}' | grep -vE "^(base|updates|extras|epel|repolist:)$"); do
-    if ! timeout 60 yum -q --disablerepo='*' --enablerepo="$id" makecache fast >/dev/null 2>&1; then
-      echo "禁用不可用的源: $id"; yum-config-manager --disable "$id" >/dev/null 2>&1 || sed -i "/^\[$id\]/,/^\[/ s/^enabled=1/enabled=0/" /etc/yum.repos.d/*.repo
-    fi
+  # 其它第三方源：用 curl 逐个探测（不用 yum repolist：不可达的源会让 yum 重试几十分钟，真实踩坑），不可用的禁用
+  for f in /etc/yum.repos.d/*.repo; do
+    [ -e "$f" ] || continue
+    awk '/^\[/{if(id!="" && en!="0" && url!="") print id, url; id=substr($0,2,length($0)-2); en="1"; url=""}
+         /^enabled *= *0/{en="0"} /^(baseurl|mirrorlist|metalink) *=/{if(url=="") {sub(/^[a-z]+ *= */,""); url=$0}}
+         END{if(id!="" && en!="0" && url!="") print id, url}' "$f" | while read -r id url; do
+      case "$id" in base|updates|extras|epel) continue;; esac
+      u=$(echo "$url" | sed -e 's/\$releasever/7/g' -e 's/\$basearch/x86_64/g' -e 's/\$infra/stock/g' -e 's/\$contentdir/centos/g')
+      case "$url" in *mirrorlist*|*metalink*) probe=$u;; *) probe=${u%/}/repodata/repomd.xml;; esac
+      case "$u" in file://*) code=$([ -e "${u#file://}/repodata/repomd.xml" ] && echo 200 || echo 000);; *) code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$probe");; esac
+      if [ "$code" != 200 ]; then echo "禁用不可用的源: $id ($code $u)"; sed -i "/^\[$id\]/,/^\[/ s/^enabled *= *1/enabled=0/" "$f"; grep -A20 "^\[$id\]" "$f" | sed '/^\[/,$!d' | grep -q "^enabled" || sed -i "/^\[$id\]/a enabled=0" "$f"; fi
+    done
   done
-  yum repolist enabled 2>&1 | tail -12
+  timeout 300 yum repolist enabled 2>&1 | tail -12
   ;;
 
 update)
@@ -102,13 +108,13 @@ inhibitors)
   echo "--- 1. 已移除驱动"
   for m in floppy pata_acpi; do lsmod | grep -q "^$m " && rmmod "$m" && echo "rmmod $m"; done
   printf 'blacklist floppy\nblacklist pata_acpi\n' > /etc/modprobe.d/leapp-removed-drivers.conf; cat /etc/modprobe.d/leapp-removed-drivers.conf
-  # 黑名单要进 initramfs，否则重启后 pata_acpi 等会从旧 initramfs 再次加载（真实踩坑）
-  for k in $(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n'); do dracut -f "/boot/initramfs-$k.img" "$k" >/dev/null 2>&1 && echo "dracut 重建 $k"; done
   echo "--- 2. 多余 kernel-devel / 旧内核"
   cur=$(uname -r); extra=$(rpm -q kernel-devel 2>/dev/null | grep -v "not installed" | grep -v "${cur%.x86_64}")
   [ -n "$extra" ] && yum -y remove $extra 2>&1 | tail -1
   rpm -q yum-utils >/dev/null || yum -y install yum-utils >/dev/null 2>&1
   package-cleanup -y --oldkernels --count=1 2>&1 | tail -1; rpm -q kernel kernel-devel
+  # （先删旧内核再重建，省时间）黑名单要进 initramfs，否则重启后 pata_acpi 等会从旧 initramfs 再次加载（真实踩坑）
+  for k in $(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n'); do dracut -f "/boot/initramfs-$k.img" "$k" >/dev/null 2>&1 && echo "dracut 重建 $k"; done
   echo "--- 3. mysql-community-libs → mariadb-libs（保住 postfix 等依赖 libmysqlclient 的包）"
   ml=$(rpm -qa --qf '%{NAME}\n' | grep -E "^mysql(57|80)?-community-(libs|libs-compat|common|client|release)$|^mysql57-community-release$|^mysql80-community-release$")
   if [ -n "$ml" ]; then rem=""; for p in $ml; do rem="$rem $p"; done

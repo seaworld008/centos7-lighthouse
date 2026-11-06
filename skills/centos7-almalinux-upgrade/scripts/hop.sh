@@ -252,6 +252,14 @@ post)
   tail -3 $K/dnfup-el$CUR.log
   left=$(rpm -qa | grep -E "\.el${PREV}(_[0-9]+)?\." | grep -v gpg-pubkey)
   echo "== 残留 el$PREV 包: $(echo $left | wc -w)"; echo "$left" | head -30
+  # 阿里云等老镜像的 cloud-init 是源码安装的（不属于 rpm），依赖旧 python，升级后每跳都 failed：禁用并挪走这些 unit
+  if ! rpm -q cloud-init >/dev/null 2>&1; then
+    for u in cloud-init-local cloud-init cloud-config cloud-final; do
+      f=$(systemctl show -p FragmentPath --value $u.service 2>/dev/null)
+      [ -n "$f" ] && [ -e "$f" ] && ! rpm -qf "$f" >/dev/null 2>&1 && { systemctl disable $u.service >/dev/null 2>&1; mkdir -p "$K/cloud-init-units"; mv "$f" "$K/cloud-init-units/"; echo "挪走源码安装的 cloud-init unit: $f"; }
+    done
+    systemctl daemon-reload; systemctl reset-failed 2>/dev/null
+  fi
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
   ;;
