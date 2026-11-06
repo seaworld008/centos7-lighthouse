@@ -5,7 +5,7 @@
 # CentOS 7 Lighthouse 🗼
 
 **AI 时代，给还在用 CentOS 7 的你一座灯塔。**
-把老旧 CentOS 7 服务器**安全地原地升级到 AlmaLinux 10**，业务不停摆、不失联、可回滚、可验证。
+把老旧 CentOS 7（以及 CentOS 8）服务器**安全地原地升级到 AlmaLinux 10**，业务不停摆、不失联、可回滚、可验证。
 
 [![CI](https://github.com/seaworld008/centos7-lighthouse/actions/workflows/ci.yml/badge.svg)](https://github.com/seaworld008/centos7-lighthouse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/seaworld008/centos7-lighthouse?color=0F4266)](https://github.com/seaworld008/centos7-lighthouse/releases)
@@ -14,7 +14,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-D97757?logo=anthropic&logoColor=white)](https://docs.claude.com/en/docs/claude-code)
 [![Agent-first](https://img.shields.io/badge/maintained%20by-AI%20agents%20%2B%20humans-7B61FF)](AGENTS.md)
 <br>
-[![Alibaba Cloud](https://img.shields.io/badge/Alibaba%20Cloud-supported-FF6A00?logo=alibabacloud&logoColor=white)](skills/centos7-almalinux-upgrade/references/cloud-providers.md)
+[![Alibaba Cloud](https://img.shields.io/badge/Alibaba%20Cloud-verified-FF6A00?logo=alibabacloud&logoColor=white)](field-reports/)
 [![Huawei Cloud](https://img.shields.io/badge/Huawei%20Cloud-verified-C7000B?logo=huawei&logoColor=white)](field-reports/)
 [![AWS](https://img.shields.io/badge/AWS-supported-232F3E?logo=amazonwebservices&logoColor=white)](skills/centos7-almalinux-upgrade/references/cloud-providers.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -109,8 +109,9 @@ flowchart LR
 | 组成 | 状态 |
 |---|---|
 | 完整流程（人工命令） | ✅ 华为云生产机 CentOS 7.7 → AlmaLinux 10.2 走通，业务全部恢复（[实战报告](field-reports/2026-11-05-huawei-jumphost-docker-vpn.md)） |
+| 全程使用脚本：`convert-el8.sh` `hop.sh`（8→9→10） `verify.sh` | ✅ 阿里云堡垒机 CentOS 8.3 → AlmaLinux 10.2，12 个容器、11 个站点和基线一致，最终重启测试通过（[实战报告](field-reports/2026-11-06-aliyun-bastion-docker-centos8.md)） |
 | `survey.sh` `backup.sh` `state.sh` `verify.sh` `hop.sh report` | ✅ 真实 EL10 机器实测；CI 在 CentOS 7 / AlmaLinux 8/9/10 容器中冒烟测试 |
-| `prep-el7.sh` `swap-openssh.sh` `hop.sh` 执行类子命令、`finalize.sh` | ⚠️ 由真实迁移中执行过的命令整理而成，尚未作为脚本在新的 CentOS 7 上整体回归（见 [ROADMAP](ROADMAP.md) v0.2） |
+| `prep-el7.sh` `swap-openssh.sh`、7→8 这一跳、`finalize.sh` | ⚠️ 由真实迁移中执行过的命令整理而成，尚未作为脚本在新的 CentOS 7 上回归（[#5](https://github.com/seaworld008/centos7-lighthouse/issues/5)） |
 
 **先在非关键机器上试，并做好整机快照。**
 

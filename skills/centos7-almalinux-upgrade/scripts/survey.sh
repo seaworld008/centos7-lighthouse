@@ -24,6 +24,8 @@ echo "virt=$VIRT dmi='$VENDOR / $PRODUCT' cloud=$CLOUD"
 [ -d /sys/firmware/efi ] && echo "boot=UEFI" || echo "boot=BIOS"
 [ "$(uname -m)" != "x86_64" ] && flag BLOCKER "架构 $(uname -m)：本技能只覆盖 x86_64"
 [ "$MAJOR" = "7" ] && ! grep -q "7.9" /etc/redhat-release && flag INFO "当前非 7.9，ELevate 要求先 yum update 到 7.9"
+OSID=$(. /etc/os-release 2>/dev/null; echo "$ID")
+[ "$MAJOR" = 8 ] && [ "$OSID" != almalinux ] && flag BLOCKER "源系统是 $(cat /etc/redhat-release)：ELevate 不支持以 CentOS 8 为源，先用 convert-el8.sh 转成 AlmaLinux 8，再 hop.sh 8→9→10"
 
 sec CPU
 grep -m1 "model name" /proc/cpuinfo; echo "nproc=$(nproc)"
@@ -51,6 +53,8 @@ echo "--- kernels:"; rpm -q kernel kernel-devel 2>/dev/null
 KD=$(rpm -q kernel-devel 2>/dev/null | grep -vc "not installed"); [ "$KD" -gt 1 ] && flag HIGH "装了 $KD 个 kernel-devel（leapp 阻断项）：只留当前内核的那个"
 echo "--- repos:"; ls /etc/yum.repos.d/
 for f in /etc/yum.repos.d/*.repo; do grep -hoE "^\[[^]]+\]" "$f"; done | sort | uniq -d | sed 's/^/DUP repo id: /'
+EPV=$(grep -hE "^(baseurl|metalink|mirrorlist)=" /etc/yum.repos.d/epel.repo 2>/dev/null | grep -oE "epel/[0-9]+|epel-[0-9]+" | grep -oE "[0-9]+" | head -1)
+[ -n "$EPV" ] && [ "$EPV" != "$MAJOR" ] && flag HIGH "epel.repo 指向 EPEL $EPV，但系统是 EL$MAJOR：转换/升级时会拉错包，先改成 EPEL $MAJOR"
 rpm -qa | grep -qiE "^(php[0-9]*w|php7[0-9]w|php5[0-9]w)-" && flag HIGH "PHP 来自 webtatic（EL8+ 无此源）：确认是否还用；要用就改 remi 或容器化"
 rpm -qa | grep -qE "^mysql-community-libs" && flag HIGH "mysql-community-libs(-compat) 替换了 mariadb-libs：用 yum swap 换回 mariadb-libs，否则删它会连带删 postfix"
 [ -e /etc/ld.so.conf.d/mysql-x86_64.conf ] && flag MEDIUM "自定义 ld.so.conf.d/mysql-x86_64.conf（leapp 会告警）"
@@ -148,6 +152,7 @@ if [ -s /tmp/.survey_custom_bins ]; then
   rm -f /tmp/.survey_custom_bins
 fi
 for n in $(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | sort -u); do
+  [ -x "$n" ] || { echo "--- $n: 在容器里运行（宿主机无此文件），见 DOCKER 段"; continue; }
   echo "--- $n -V:"; $n -V 2>&1
   $n -T 2>/dev/null | grep -nE "^\s*ssl\s+on;" | head -3 | grep -q . && flag MEDIUM "nginx 配置用了 'ssl on;'：nginx ≥1.25.1 已删除，迁移到新版时改成 'listen 443 ssl;'"
   echo "--- server_name:"; $n -T 2>/dev/null | grep -E "^\s*server_name" | sort -u

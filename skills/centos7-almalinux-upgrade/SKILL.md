@@ -1,7 +1,7 @@
 ---
 name: centos7-almalinux-upgrade
 license: MIT
-description: 把老旧 CentOS 7（及 RHEL7 系）服务器原地升级到最新 AlmaLinux 10（经 ELevate/Leapp 7→8→9→10），并保证业务、容器、nginx、kubectl 等升级后照常工作。凡是用户提到 CentOS 7 / CentOS 停服 / EOL / 老系统升级 / 迁移到 AlmaLinux / Rocky / CentOS 继任者 / ELevate / leapp / 系统漏洞要升级系统、批量升级阿里云/华为云/AWS 上的 CentOS 服务器，都要使用本技能——即使用户没说"升级"而只说"系统太老了""换个新系统但业务不能停"。In-place upgrade CentOS 7 to AlmaLinux 10 safely, single server or whole fleet.
+description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地升级到最新 AlmaLinux 10（经 ELevate/Leapp 7→8→9→10，CentOS 8 先用 almalinux-deploy 转换），并保证业务、容器、nginx、kubectl 等升级后照常工作。凡是用户提到 CentOS 7 / CentOS 停服 / EOL / 老系统升级 / 迁移到 AlmaLinux / Rocky / CentOS 继任者 / ELevate / leapp / 系统漏洞要升级系统、批量升级阿里云/华为云/AWS 上的 CentOS 服务器，都要使用本技能——即使用户没说"升级"而只说"系统太老了""换个新系统但业务不能停"。In-place upgrade CentOS 7 to AlmaLinux 10 safely, single server or whole fleet.
 ---
 
 # CentOS 7 → AlmaLinux 10 原地升级
@@ -32,6 +32,7 @@ description: 把老旧 CentOS 7（及 RHEL7 系）服务器原地升级到最新
 | `backup.sh` | 备份配置 + 生成业务基线 `baseline.tsv`（服务/端口/容器/各域名 HTTP 码/kubectl） |
 | `state.sh` / `verify.sh` | 生成当前状态 / 与基线对比，输出 FAIL/WARN |
 | `prep-el7.sh` | EL7 准备：`repos` 修源、`update` 到 7.9、`pipfix`、`inhibitors` |
+| `convert-el8.sh` | 源系统是 CentOS 8 时：`prep` → `run`（官方 almalinux-deploy）→ `post`，转成 AlmaLinux 8 |
 | `swap-openssh.sh` | 把自编译 openssh 换回官方包（带自动兜底） |
 | `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post` |
 | `nginx-static-build.sh` | 自编译 nginx 同版本静态重编（过渡期一路可用） |
@@ -76,6 +77,16 @@ bash swap-openssh.sh                 # 仅当 survey 报 openssh 非官方包；
 ```
 自编译 nginx 等依赖 EL7 库的程序：EL7 上就用 `nginx-static-build.sh` 静态重编（或接受过渡期停用，最后装官方包）。
 宿主机数据库：先逻辑备份。
+
+**源系统是 CentOS Linux 8 / CentOS Stream 8 时**（survey 会报 BLOCKER）：ELevate 不支持以它为源，跳过上面的 EL7 准备，先做同版本转换，然后从阶段 3 的 8→9 开始：
+```bash
+bash convert-el8.sh prep <MIRROR>                    # 修源（vault、EPEL8）、pip 冲突、多余 kernel-devel
+bash convert-el8.sh update                           # 升到 8.5（almalinux-deploy 要求 ≥8.4）
+bash convert-el8.sh run  <MIRROR> <almalinux-deploy.sh>   # 官方 almalinux-deploy：-d 允许降级，-l 用镜像
+bash hop.sh reboot && python remote.py HOST wait-ssh   # 重启进入 AlmaLinux 内核
+bash convert-el8.sh post                             # 删除非 AlmaLinux 内核，dnf upgrade
+```
+国内服务器通常访问不了 GitHub raw，需要先在本机下载 `almalinux-deploy.sh` 再上传。
 
 ### 阶段 3：每一跳（7→8、8→9、9→10 各做一遍）
 

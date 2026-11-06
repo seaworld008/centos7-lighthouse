@@ -5,6 +5,26 @@
 
 ## [Unreleased]
 
+### Added
+- `convert-el8.sh`：源系统为 CentOS Linux 8 / Stream 8 时，先用官方 almalinux-deploy 转成 AlmaLinux 8，再走 8→9→10。子命令为 `prep` / `update` / `run` / `post`（`verified-on-real-run`，阿里云）
+- `survey.sh`：CentOS 8 源系统报 BLOCKER；`epel.repo` 版本与系统不一致报 HIGH；nginx 跑在容器里时不再误报"文件不存在"
+- `state.sh`：能读出容器里 nginx/openresty/tengine 的 server_name；老版本 nginx 没有 `-T` 时直接读配置文件；所有 TCP 端口按 IP 探测，443 用 https
+- `verify.sh`：新版本 unit 因启动条件不满足而跳过（如 sssd 无配置）时视为预期
+- `hop.sh answer`：8→9 自动处理 firewalld `AllowZoneDrifting` 阻断项（只改配置，不 reload）
+- `hop.sh prep`：按 `.sigs` 签名 key 判断本机在用的厂商源，只探测这些（docker-ce 的 PES 是空的）
+- `hop.sh answer`：9→10 自动执行 `nmcli connection migrate`，并对比迁移前后的地址和默认路由
+- `hop.sh post`：先等 leapp FirstBoot（`leapp_resume.service`）结束再清理；禁用只有 metalink 的 epel-cisco-openh264
+- `verify.sh`：dbus → dbus-broker 映射；30 秒内 RestartCount 仍在增长的容器判为 FAIL（crash-loop 检测）
+- `bgrun`（hop.sh / convert-el8.sh / prep-el7.sh）把后台命令的退出码传出来；`convert-el8.sh update` 失败或升级后仍低于 8.4 时停止
+- `hop.sh post`：镜像改写覆盖所有 `epel*.repo`（含 EL8 的 epel-modular，并设 `skip_if_unavailable=1`），只排除 cisco-openh264
+- 实战报告：[阿里云堡垒机 CentOS 8.3 → AlmaLinux 10.2](field-reports/2026-11-06-aliyun-bastion-docker-centos8.md)
+
+### Fixed
+- `hop.sh pre` 末尾调用 `"$0" report` 时，因为 SFTP 上传的文件没有执行权限而报 Permission denied → 改为 `bash "$0"`（`verified-on-real-run`）
+- `convert-el8.sh` 自建的 vault 源与 AlmaLinux 的 repo id 冲突，导致 distro-sync 实际同步回 CentOS → 改用 `c8vault-*` 并在转换前移走（`verified-on-real-run`）
+- `hop.sh post` 与 leapp_resume 竞争，导致 FirstBoot 中断（`verified-on-real-run`：9→10 时已正确等待）
+- `hop.sh report` 在 EL7（py2）和 EL8（py3.6）的 `LC_ALL=C` 环境下输出中文时崩溃（由 CI 冒烟测试发现）
+
 ### Changed
 - ci: actions/checkout v7、setup-python v7、setup-node v7、gitleaks-action v3（Node 24 运行时）
 

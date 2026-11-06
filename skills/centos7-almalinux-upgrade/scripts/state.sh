@@ -23,26 +23,35 @@ if command -v docker >/dev/null 2>&1; then
   docker ps -a --format '{{.Names}}\t{{.State}}' 2>/dev/null | sort | sed 's/^/ctr\t/'
 fi
 
-# nginx 虚拟主机探测
+# nginx 虚拟主机探测：宿主机 nginx + 容器里的 nginx/openresty/tengine（docker-proxy 映射到本机 80/443）
 NG=$(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | head -1 | tr -d ' ')
+[ -n "$NG" ] && [ ! -x "$NG" ] && NG=""          # 容器里的 nginx 进程，路径在宿主机上不存在
 [ -z "$NG" ] && command -v nginx >/dev/null 2>&1 && NG=$(command -v nginx)
-if [ -n "$NG" ]; then
-  $NG -T 2>/dev/null | grep -E "^\s*server_name\s" | sed -E 's/^\s*server_name\s+//; s/;.*//' | tr ' ' '\n' \
-    | grep -vE "^(_|localhost|\*.*|~.*|)$" | sort -u | while read -r h; do
-      for sch in https http; do
-        port=443; [ $sch = http ] && port=80
-        code=$(curl -sk -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
-        printf "http\t%s://%s/\t%s\n" "$sch" "$h" "${code:-000}"
-      done
+{
+  [ -n "$NG" ] && $NG -T 2>/dev/null
+  if command -v docker >/dev/null 2>&1; then
+    docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | grep -iE "nginx|openresty|tengine" | awk '{print $1}' | while read -r c; do
+      # 老 nginx（<1.9.2）没有 -T：退回到直接读容器挂载点和常见配置目录里的 *.conf
+      dests=$(docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$c" 2>/dev/null)
+      docker exec "$c" sh -c "nginx -T 2>/dev/null || openresty -T 2>/dev/null || find $dests /etc/nginx /usr/local/openresty/nginx/conf /usr/local/nginx/conf /usr/servers/nginx/conf -name '*.conf' -type f -exec cat {} + 2>/dev/null" 2>/dev/null
     done
-fi
-# 其它 TCP 端口的 http 探测（非 http 服务稳定返回 000，作为基线照样可比）
+  fi
+} | grep -E "^\s*server_name\s" | sed -E 's/^\s*server_name\s+//; s/;.*//' | tr ' ' '\n' \
+  | grep -vE "^(_|localhost|\*.*|~.*|)$" | sort -u | while read -r h; do
+    for sch in https http; do
+      port=443; [ $sch = http ] && port=80
+      code=$(curl -sk -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
+      printf "http\t%s://%s/\t%s\n" "$sch" "$h" "${code:-000}"
+    done
+  done
+# 所有 TCP 端口按 IP 做 http 探测（443 用 https；非 http 服务稳定返回 000，作为基线照样可比）
 SSHP=$(sshd -T 2>/dev/null | awk '/^port /{print $2}')
 ss -tln 2>/dev/null | tail -n +2 | awk '{split($4,a,":"); print a[length(a)]}' | sort -un | while read -r p; do
-  case "$p" in 22|25|80|443|111|323|10050) continue;; esac
+  case "$p" in 22|25|111|323|10050) continue;; esac
   echo " $SSHP " | grep -q " $p " && continue
-  code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "http://127.0.0.1:$p/" 2>/dev/null)
-  printf "http\thttp://127.0.0.1:%s/\t%s\n" "$p" "${code:-000}"
+  sch=http; [ "$p" = 443 ] || [ "$p" = 8443 ] && sch=https
+  code=$(curl -sk -o /dev/null -m 4 -w '%{http_code}' "$sch://127.0.0.1:$p/" 2>/dev/null)
+  printf "http\t%s://127.0.0.1:%s/\t%s\n" "$sch" "$p" "${code:-000}"
 done
 
 if command -v kubectl >/dev/null 2>&1 && [ -s /root/.kube/config ]; then

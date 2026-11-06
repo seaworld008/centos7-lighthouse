@@ -50,8 +50,9 @@ You can also copy `skills/centos7-almalinux-upgrade` into `~/.claude/skills/`, o
 ## Verification status
 
 - The full procedure (as manual commands) worked on a production Huawei Cloud server, CentOS 7.7 → AlmaLinux 10.2, with all services restored ([field report](field-reports/2026-11-05-huawei-jumphost-docker-vpn.md)).
-- The read-only scripts and `hop.sh report` were tested on a real EL10 machine. CI runs smoke tests in CentOS 7 / AlmaLinux 8/9/10 containers.
-- The execution subcommands (`prep-el7.sh`, `swap-openssh.sh`, `hop.sh prep/up/post`, `finalize.sh`) were distilled from that run's commands but haven't yet had an end-to-end regression run as scripts. **Try a non-critical server first, and take a full snapshot.**
+- Fully scripted run: an Alibaba Cloud bastion host went CentOS 8.3 → AlmaLinux 10.2 using `convert-el8.sh` + `hop.sh` (8→9→10) + `verify.sh`. All 12 containers and 11 vhosts matched the baseline, and the final reboot test passed ([field report](field-reports/2026-11-06-aliyun-bastion-docker-centos8.md)).
+- CI runs smoke tests in CentOS 7 / AlmaLinux 8/9/10 containers.
+- Not yet regression-tested as scripts: `prep-el7.sh`, `swap-openssh.sh`, the 7→8 hop, and `finalize.sh` (tracked in issue #5). **Try a non-critical server first, and take a full snapshot.**
 
 ## Agent-first
 

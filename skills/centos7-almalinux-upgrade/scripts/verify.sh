@@ -21,6 +21,14 @@ while [ $t -lt "$WAIT" ]; do
   sleep 10; t=$((t+10))
 done
 
+# 反复重启检测：快照时刚好处于 running 也可能在 crash-loop（真实踩坑：快照瞬间显示 running）。间隔 30 秒看 RestartCount 是否还在涨
+FLAP=""
+if command -v docker >/dev/null 2>&1 && [ "$WAIT" -gt 0 ]; then
+  r1=$(docker ps -aq | xargs -r docker inspect -f '{{.Name}} {{.RestartCount}}' 2>/dev/null); sleep 30
+  r2=$(docker ps -aq | xargs -r docker inspect -f '{{.Name}} {{.RestartCount}}' 2>/dev/null)
+  FLAP=$(join <(echo "$r1" | sort) <(echo "$r2" | sort) 2>/dev/null | awk '$3>$2{print substr($1,2)" ("$2"→"$3")"}' | tr '\n' ' ')
+fi
+
 NOW=$(mktemp); bash "$HERE/state.sh" > "$NOW" 2>/dev/null
 FAIL=0; WARNN=0
 fail() { echo "FAIL  $*"; FAIL=$((FAIL+1)); }
@@ -29,10 +37,12 @@ warn() { echo "WARN  $*"; WARNN=$((WARNN+1)); }
 echo "== 系统: $(awk -F'\t' '$1=="os"{print $2}' "$BL")  →  $(awk -F'\t' '$1=="os"{print $2}' "$NOW")   kernel $(uname -r)"
 
 # 服务：基线 active 的现在不 active
-declare -A RENAMED=( [ntpd.service]=chronyd.service [network.service]=NetworkManager.service [iptables.service]=nftables.service )
+declare -A RENAMED=( [ntpd.service]=chronyd.service [dbus.service]=dbus-broker.service [network.service]=NetworkManager.service [iptables.service]=nftables.service )
 awk -F'\t' '$1=="unit"{print $2}' "$BL" | while read -r u; do
   grep -qP "^unit\t${u//./\\.}$" "$NOW" && continue
   alt=${RENAMED[$u]}; [ -n "$alt" ] && grep -qP "^unit\t${alt//./\\.}$" "$NOW" && { echo "OK    $u → $alt（预期的替换）"; continue; }
+  # 新版本 unit 带 Condition*（如 sssd 无配置文件就不启动）：条件不满足而跳过属于预期
+  [ "$(systemctl show -p ConditionResult --value "$u" 2>/dev/null)" = no ] && { echo "OK    $u 未启动：启动条件不满足（无配置，新版本 unit 自动跳过，预期）"; continue; }
   echo "WARN  服务 $u 升级前在运行，现在没有（systemctl status $u）"
 done | tee /tmp/.v_units
 WARNN=$((WARNN+$(grep -c ^WARN /tmp/.v_units)))
@@ -53,6 +63,7 @@ awk -F'\t' '$1=="ctr"{print $2"\t"$3}' "$BL" | while IFS=$'\t' read -r n s; do
   if [ "$s" = running ] && [ "$now" != running ]; then echo "FAIL  容器 $n: 升级前 running，现在 ${now:-不存在}（docker logs --tail 50 $n）"; fi
 done | tee /tmp/.v_ctr
 FAIL=$((FAIL+$(grep -c ^FAIL /tmp/.v_ctr)))
+[ -n "$FLAP" ] && { echo "FAIL  容器在 30 秒内仍在重启（crash-loop）: $FLAP  → docker logs --tail 50 <name>"; FAIL=$((FAIL+1)); }
 
 # HTTP
 awk -F'\t' '$1=="http"{print $2"\t"$3}' "$BL" | while IFS=$'\t' read -r url code; do

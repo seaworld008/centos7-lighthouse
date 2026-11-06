@@ -54,6 +54,12 @@ if [ "$(rpm -E %rhel 2>/dev/null)" = 7 ]; then
 else
   t "prep-el7.sh refuses non-EL7" bash -c "! bash '$K/prep-el7.sh' repos upstream"
 fi
+if [ "$(rpm -E %rhel 2>/dev/null)" = 8 ]; then
+  t "convert-el8.sh usage on EL8"     bash -c "bash '$K/convert-el8.sh' | grep -q 'convert-el8.sh prep'"
+  t "convert-el8.sh run refuses <8.4" bash -c "grep -qE 'release 8\.[4-9]|Stream' /etc/redhat-release && exit 0; ! bash '$K/convert-el8.sh' run upstream /nonexistent"
+else
+  t "convert-el8.sh refuses non-EL8"  bash -c "! bash '$K/convert-el8.sh' prep upstream"
+fi
 PYB=$(command -v python3 || true)
 [ -n "$PYB" ] && t "remote.py compiles (py3)" "$PYB" -m py_compile "$K/remote.py"
 

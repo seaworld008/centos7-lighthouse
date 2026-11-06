@@ -23,6 +23,7 @@ bgrun() { # bgrun <name> <cmd...>  用 systemd-run 后台执行并等待（不�
   echo "后台任务 $name 已启动，日志 $log"
   local t=0; until grep -q "^__RC=" "$log" 2>/dev/null; do sleep 10; t=$((t+10)); [ $((t % 120)) = 0 ] && echo "  ...${t}s $(tail -1 "$log" 2>/dev/null | cut -c1-100)"; done
   tail -5 "$log"
+  local rc; rc=$(sed -n 's/^__RC=//p' "$log" | tail -1); echo "__RC=${rc:-?}"; return "${rc:-1}"   # 把后台命令的退出码传出去
 }
 
 repo_ok() { curl -sfI -m 15 "$1/repodata/repomd.xml" >/dev/null 2>&1; }
@@ -75,7 +76,7 @@ EOF
 
 update)
   echo "当前: $(cat /etc/redhat-release)"
-  bgrun yum7update "yum -y update --exclude='docker*' --exclude='containerd*' --exclude='openssh*'"
+  bgrun yum7update "yum -y update --exclude='docker*' --exclude='containerd*' --exclude='openssh*'" || echo "!! yum update 返回非 0（个别包失败时也会这样，看下面的 Failed 段）"
   grep -E "^(Failed|Error|error:)" -A3 /root/os-upgrade-kit/yum7update.log | head -20
   echo "现在: $(cat /etc/redhat-release)；有 Failed 的包通常是 pip 文件冲突 → 运行 pipfix 后重装该包"
   ;;
