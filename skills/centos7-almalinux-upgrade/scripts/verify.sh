@@ -42,6 +42,8 @@ awk -F'\t' '$1=="unit"{print $2}' "$BL" | while read -r u; do
   grep -qP "^unit\t${u//./\\.}$" "$NOW" && continue
   alt=${RENAMED[$u]}; [ -n "$alt" ] && grep -qP "^unit\t${alt//./\\.}$" "$NOW" && { echo "OK    $u → $alt（预期的替换）"; continue; }
   # 新版本 unit 带 Condition*（如 sssd 无配置文件就不启动）：条件不满足而跳过属于预期
+  # 先区分"unit 已不存在"（被卸载/替换——要人判断）和"条件不满足被跳过"（预期）；不存在的 unit 也会返回 ConditionResult=no
+  [ "$(systemctl show -p LoadState --value "$u" 2>/dev/null)" = not-found ] && { echo "WARN  服务 $u 已不存在（被卸载或改名）：确认是否符合预期"; continue; }
   [ "$(systemctl show -p ConditionResult --value "$u" 2>/dev/null)" = no ] && { echo "OK    $u 未启动：启动条件不满足（无配置，新版本 unit 自动跳过，预期）"; continue; }
   echo "WARN  服务 $u 升级前在运行，现在没有（systemctl status $u）"
 done | tee /tmp/.v_units
