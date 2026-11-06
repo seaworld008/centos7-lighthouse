@@ -29,7 +29,8 @@
 2. **诚实标注验证状态**：只在真实机器上跑通过的才写"已验证"。CHANGELOG 和 PR 描述里区分 `verified-on-real-run` 与 `untested`。
 3. **脚本兼容性**：`scripts/*.sh` 必须在 EL7 到 EL10 都能运行：
    - bash 4.2，不用 `ss -H`、`mapfile -d`、`${var@Q}` 等新特性
-   - EL7 上没有 python3，需要 Python 的地方用 `$PY` 回退到 python2，并加 `from __future__ import print_function`
+   - EL7 上没有 python3，需要 Python 的地方用 `$PY` 回退到 python2
+   - 内嵌 Python 第一行写 `# -*- coding: utf-8 -*-`，并加 `from __future__ import print_function, unicode_literals`；调用时加 `PYTHONIOENCODING=utf-8`。原因：脚本都设置了 `LC_ALL=C`，在这种环境下 py2 和 py3.6 输出中文会直接崩溃。EL10 的 py3.12 不会崩，所以只在新系统上测试发现不了（CI 冒烟测试因此抓到过这个问题）
    - 每个 `for f in dir/*` 都要先判断 `[ -e "$f" ] || continue`
    - 不依赖可能缺失的命令；缺失时要优雅降级
 4. **只读脚本保持只读**：`survey.sh`、`state.sh`、`verify.sh`、`hop.sh report|status` 不得修改系统。

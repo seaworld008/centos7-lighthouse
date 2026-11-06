@@ -101,8 +101,9 @@ up)
 
 report)
   R=$LL/leapp-report.json; [ -f $R ] || { echo "无报告"; exit 1; }
-  $PY - "$R" <<'EOF'
-from __future__ import print_function
+  PYTHONIOENCODING=utf-8 $PY - "$R" <<'EOF'   # LC_ALL=C 下 py3.6 的 stdout 是 ascii；py2 需要 coding 声明
+# -*- coding: utf-8 -*-
+from __future__ import print_function, unicode_literals
 import json, sys
 r = json.load(open(sys.argv[1]))
 inh, other = [], []
