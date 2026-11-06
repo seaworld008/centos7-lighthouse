@@ -60,6 +60,17 @@ if [ "$(rpm -E %rhel 2>/dev/null)" = 8 ]; then
 else
   t "convert-el8.sh refuses non-EL8"  bash -c "! bash '$K/convert-el8.sh' prep upstream"
 fi
+# ---- 会修改系统的测试：只在一次性容器里跑（/.dockerenv 存在），绝不在真实机器上跑 ----
+if [ -f /.dockerenv ] && [ "$(rpm -E %rhel 2>/dev/null)" = 7 ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
+  t "prep-el7.sh repos upstream → vault 源可用" bash -c "bash '$K/prep-el7.sh' repos upstream >/tmp/r.out 2>&1; grep -q 'vault.centos.org/7.9.2009' /etc/yum.repos.d/CentOS-Base.repo && yum -q makecache fast >/dev/null 2>&1"
+  mkdir -p /usr/lib/python2.7/site-packages/fake_pip_pkg && touch /usr/lib/python2.7/site-packages/fake_pip_pkg-1.0-py2.7.egg-info
+  t "prep-el7.sh pipfix 挪走不属于 rpm 的文件" bash -c "bash '$K/prep-el7.sh' pipfix | grep -q '挪走 [0-9]* 个' && [ ! -e /usr/lib/python2.7/site-packages/fake_pip_pkg ]"
+  t "prep-el7.sh inhibitors 可执行" bash -c "bash '$K/prep-el7.sh' inhibitors >/tmp/i.out 2>&1; grep -q 'blacklist floppy' /etc/modprobe.d/leapp-removed-drivers.conf"
+  t "swap-openssh.sh: 未安装时不动" bash -c "rpm -q openssh-server >/dev/null && exit 0; bash '$K/swap-openssh.sh' | grep -q '未安装'"
+  yum -q -y install openssh-server >/dev/null 2>&1
+  t "swap-openssh.sh: 官方包时不替换" bash -c "bash '$K/swap-openssh.sh' | grep -q '已是官方包'"
+  t "survey.sh 在 EL7 上能识别 pip/openssh 状态" bash -c "bash '$K/survey.sh' 2>/dev/null | grep -q '^===== OPENSSH'"
+fi
 PYB=$(command -v python3 || true)
 [ -n "$PYB" ] && t "remote.py compiles (py3)" "$PYB" -m py_compile "$K/remote.py"
 

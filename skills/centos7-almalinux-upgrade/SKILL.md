@@ -36,6 +36,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `swap-openssh.sh` | 把自编译 openssh 换回官方包（带自动兜底） |
 | `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post` |
 | `nginx-static-build.sh` | 自编译 nginx 同版本静态重编（过渡期一路可用） |
+| `fleet_summary.py` | 本机运行：汇总多台 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批） |
 | `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装 |
 
 本机在 Windows Git Bash 下调用时，`remote.py` 已自动处理 MSYS 把 `/root/...` 改写成 `C:/Program Files/Git/root/...` 的问题。

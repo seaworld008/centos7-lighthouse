@@ -20,7 +20,8 @@
 | `skills/.../references/fleet.md` | 批量推进 | 流程改进 |
 | `field-reports/` | 每次真实执行的脱敏报告 | **每次真实执行后必写** |
 | `tools/check_repo.py` | 仓库自检（结构、版本一致、敏感信息） | 新规则 |
-| `tests/container-smoke.sh` | 在 CentOS 7 / AlmaLinux 8/9/10 容器里跑脚本冒烟测试 | 新脚本/新子命令 |
+| `tests/container-smoke.sh` | 在 CentOS 7 / AlmaLinux 8/9/10 容器里跑脚本冒烟测试；会修改系统的测试只在 `/.dockerenv` 存在时运行 | 新脚本/新子命令 |
+| `tests/test_*.py` | Python 工具的单元测试（unittest，标准库） | 改 `fleet_summary.py` 等时 |
 | `.claude-plugin/` | Claude Code 插件与 marketplace 清单 | 发版时改版本号 |
 | `CHANGELOG.md` | 变更记录 | 每个 PR |
 
@@ -54,6 +55,7 @@
 ```bash
 python tools/check_repo.py                 # 结构、版本一致性、敏感信息、SKILL.md 引用的文件都存在
 bash -n skills/*/scripts/*.sh               # 语法
+python -m unittest discover -s tests        # fleet_summary.py 等 Python 工具的单元测试
 shellcheck -S warning -e SC2010 -s bash skills/*/scripts/*.sh tests/*.sh
 bash tests/container-smoke.sh               # 需要 docker；CI 会在 centos:7 / almalinux:8/9/10 跑
 claude plugin validate .                    # 插件/marketplace 清单
@@ -66,7 +68,8 @@ claude plugin validate .                    # 插件/marketplace 清单
   1. 同步修改 `.claude-plugin/plugin.json` 的 `version`，以及 `marketplace.json` 里的 `metadata.version` 和 `plugins[0].version`
   2. 把 `CHANGELOG.md` 的 `[Unreleased]` 改成新版本号
   3. `check_repo.py` 会校验三处版本号与 CHANGELOG 一致
-  4. 打 tag `vX.Y.Z` 并创建 GitHub Release
+  4. 提 PR，CI 通过后合并。`Release` 工作流检测到 main 上 `plugin.json` 的版本变化后，会自动打 `vX.Y.Z` 标签，并用 CHANGELOG 对应段落发布 Release。不要手工打标签
+- 分支：仓库只长期保留 `main`。PR 合并后分支会自动删除；main 有保护，必须通过 CI
 
 ## 常见任务 → 去哪里
 | 任务 | 入口 |

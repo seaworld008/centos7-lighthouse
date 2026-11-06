@@ -11,6 +11,7 @@
 export LC_ALL=C
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 W=/root/os-upgrade-kit/ossh-swap; mkdir -p "$W"; cd "$W" || exit 1
+rpm -q openssh-server >/dev/null 2>&1 || { echo "openssh-server 未安装（rpm），无需替换"; exit 0; }
 V=$(rpm -q --qf '%{VENDOR}' openssh-server)
 case "$V" in *CentOS*|*AlmaLinux*|*"Red Hat"*) echo "openssh-server 已是官方包（$V），无需替换"; exit 0;; esac
 PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'); PORT=${PORT:-22}
