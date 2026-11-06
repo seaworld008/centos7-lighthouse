@@ -18,7 +18,7 @@ jobs:
     name: Lint & self-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -37,7 +37,7 @@ jobs:
     name: Claude Code plugin manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -55,7 +55,7 @@ jobs:
       matrix:
         image: ["centos:7", "almalinux:8", "almalinux:9", "almalinux:10"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # actions/checkout 不能在 centos:7 容器内运行（glibc 太旧），所以从宿主机 docker run
       - name: Run toolkit inside ${{ matrix.image }}
         run: docker run --rm -v "$PWD:/repo:ro" "${{ matrix.image }}" bash /repo/tests/container-smoke.sh --inside
@@ -64,7 +64,7 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
