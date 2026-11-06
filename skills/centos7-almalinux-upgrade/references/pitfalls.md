@@ -44,6 +44,22 @@
 - 处理：`swap-openssh.sh`：用官方 sshd 先 `-t` 测现有配置，备份旧二进制，systemd-run 脱离会话替换，端口没起来就用旧 sshd 兜底。替换后立即用新连接验证。
 - 注意：9.x 自编译版的会话进程是 `/usr/libexec/openssh/sshd-session`，换包后旧监听进程再 fork 新会话会失败，所以换完必须立刻重启 sshd（脚本已处理）。
 
+**★ 还在用 `network.service`（NetworkManager 没运行）**
+- 风险：EL8 起以 NetworkManager 为准，EL9 起已经没有 network-scripts。
+- 处理：`prep-el7.sh netmgr`：安装并启用 NM，去掉 `NM_CONTROLLED=no`，在后台切换；检查默认路由和外网访问，失败就自动回滚到 network.service。然后**在 EL7 上重启一次**，确认切换在重启后依然生效。
+
+**★ yum update 装了新内核，但运行的还是旧内核** → leapp 要求当前运行的是最新内核，所以 7→8 之前要先在 EL7 上重启一次（可以和上面的 NM 验证一起做）。
+
+**★ Harbor 机器重启后，core/registry/nginx 等容器全部 exited：`failed to initialize logging driver: dial tcp 127.0.0.1:1514: connection refused`**
+- 原因：Harbor 的容器都用 syslog 日志驱动，发到 harbor-log 容器（1514 端口）。开机时它们比 harbor-log 先启动，Docker **不会重试**这种失败。这与升级无关，任何一次重启都会发生，但升级要重启好几次。
+- 处理：加一个 `harbor-autostart.service`：等 1514 端口可用后，`docker start` 该 compose 项目里已经退出的容器（见 app-compat.md 的 Harbor 一节）。
+
+**★ 自编译 nginx 静态重编时的坑**（`nginx-static-build.sh` 已修）
+- 正则误伤：`--with-openssl-opt=...` 被截成 `-opt=...`
+- 老版本（如 1.16.x）的签名者公钥已不在 nginx.org/keys → 按 key ID 从 keyserver.ubuntu.com 获取
+- 国内服务器下载 GitHub 上的 OpenSSL 超时 → 在本机下载后上传到 `/usr/local/src/nginx-static/`；残缺文件会被 sha256 校验发现并删除
+- 运行中的二进制 `cp` 覆盖会报 `Text file busy` → 先复制再 `mv` 替换
+
 **★ 卸载 `mysql-community-libs-compat` 会连带删掉 postfix**
 - 原因：它替换了 `mariadb-libs` 提供的 libmysqlclient.so.18，postfix 依赖它。
 - 处理：`yum swap -- remove mysql-community-* -- install mariadb-libs`（`prep-el7.sh inhibitors` 已做）；宿主机若装了 mysql-community-server 则不要自动处理。
@@ -101,6 +117,8 @@
 | 阻断项 / 报错 | 处理 |
 |---|---|
 | ★ `Cannot perform the VDO check of block devices` | `dnf install vdo`（让检查能跑），确认无 VDO 设备后 `leapp answer --section check_vdo.confirm=True`（hop.sh answer 自动） |
+| ★ `Network configuration for unsupported device types detected`（ifcfg-eth0） | 老阿里云镜像的 ifcfg 没有 `TYPE=Ethernet`，且是静态 IP。EL8 的 NM（≥1.38）可以直接 `nmcli connection migrate` 转成 keyfile，`hop.sh answer` 在 8→9 遇到这个阻断项时自动处理（迁移前后对比地址和默认路由），也顺带解决了 9→10 的 ifcfg 阻断项 |
+| ★ `iptables-services` 出现在 8→9 的删除列表 | EL9 改名为 `iptables-nft-services`。先看 `/etc/sysconfig/iptables`：如果只有全部 ACCEPT（常见），删了也没影响；如果有真实规则，升级后安装 iptables-nft-services 并 enable |
 | ★ `Firewalld Configuration AllowZoneDrifting Is Unsupported` | `AllowZoneDrifting=no`（EL9 行为本来就等同于 no）；`hop.sh answer` 自动处理。**不要 `firewall-cmd --reload`**：可能清掉 Docker 的 iptables 链，导致容器网络断开，重启时自然生效 |
 | ★ 安装 el8 的 leapp 时 `filtered out by exclude filtering` | 上一跳 leapp 在 /etc/dnf/dnf.conf、/etc/yum.conf 留了 `exclude=...leapp...`，删掉（hop.sh 已处理） |
 | ★ 旧 el7 leapp 包残留导致 el8 leapp 装不上 | `rpm -e --nodeps` 删旧 leapp 包 + 删 /etc/leapp/files（hop.sh prep/post 已处理） |
@@ -112,6 +130,7 @@
 
 | 阻断项 / 报错 | 处理 |
 |---|---|
+| ★ `Deprecated DHCP plugin configured` | NM 用的是 `dhcp=dhclient`，而 EL10 没有 dhclient。来源可能不在 /etc：实测在 `/usr/lib/NetworkManager/conf.d/10-dhcp-dhclient.conf`，是**不属于任何包的残留文件**。`hop.sh answer` 会注释掉 /etc 里的这一行，并挪走 /usr/lib 下的残留文件；用 `NetworkManager --print-config \| grep dhcp` 确认已不再生效。静态 IP 的网卡不受影响 |
 | ★ `Legacy network configuration found`（每个 ifcfg 一条） | 先备份 network-scripts，`nmcli connection migrate`（不重连，地址/路由不变），确认 eth0 的 FILENAME 变成 .nmconnection |
 | ★ `Berkeley DB (libdb) has been detected` | EL10 没有 libdb。postfix 的 `hash:` 表升级后改 `lmdb:`（finalize.sh postfix-lmdb）；其它用 libdb 的程序要换 |
 | ★ `kernel drivers which are no longer maintained`（nft_compat、ip_set） | 提示；fail2ban/docker 仍可用，升级后验证 |
@@ -139,6 +158,14 @@
 **★ `dnf distro-sync` 报模块包冲突（javapackages、eclipse/maven 模块）**
 - 处理：用 `dnf -y upgrade --nobest` 即可，不必强求 distro-sync。
 
+**★ 7→8 后 EL7 内核删不掉：`%preun(kernel-3.10.0-…) scriptlet failed, exit status 127`**
+- 原因：EL7 内核包的卸载脚本调用 `new-kernel-pkg`，EL8 上没有这个命令。
+- 处理：`hop.sh post` 会用 `rpm -e --noscripts` 删除，再清理 `/boot` 下对应的文件、`/lib/modules/<ver>` 和 BLS 启动项。
+
+**★ 7→8 预检又报 floppy/pata_acpi 已加载（明明已经加了黑名单）**
+- 原因：黑名单只写在 /etc/modprobe.d，但开机用的是旧 initramfs（黑名单之前构建的），所以模块又被加载了。另外 `prep-el7.sh inhibitors` 曾把 "rmmod xxx" 写进了黑名单文件。
+- 处理：两处都已修复：写入黑名单后用 `dracut -f` 重建 initramfs；`hop.sh answer`（7→8）会再卸载一次。
+
 **★ 旧内核、leapp 包、/var/lib/leapp（3GB+）残留**
 - 处理：`hop.sh post` 统一清理，并删失效的 BLS 启动项。
 
@@ -161,6 +188,10 @@
 - 教训：组件和站点的对应关系要在删之前告诉用户（nginx -T 里哪些 server 用 fastcgi_pass）。由用户决定站点去留。
 
 **`pkill`/`docker stop` 后 VPN 断开、无法登录**：见 recovery.md "失联"。
+
+**★ ssmtp 在 7→8 被删除（EL8 没有这个包）**：如果 `/etc/ssmtp/ssmtp.conf` 里配了 `mailhub`，说明机器用它发过邮件，升级后可以改用 EPEL 的 `msmtp`（配置格式相近），并写进报告。
+
+**★ LNMP 一键包的 `/home/wwwlogs` 是 777**：自己加的 logrotate 会因为 "parent directory has insecure permissions" 跳过，需要在配置里加 `su root root`。
 
 **★ 证书即将过期**：迁移 nginx 时顺手 `openssl x509 -noout -enddate` 检查，写进报告。
 

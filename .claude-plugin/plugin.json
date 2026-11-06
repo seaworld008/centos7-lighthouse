@@ -1,6 +1,6 @@
 {
   "name": "centos7-almalinux-upgrade",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Safely upgrade CentOS 7 / CentOS 8 servers in place to AlmaLinux 10 (ELevate 7→8→9→10) while keeping workloads running: survey, baseline/verify, per-hop automation, recovery and fleet rollout for Alibaba Cloud / Huawei Cloud / AWS.",
   "author": {
     "name": "seaworld008",

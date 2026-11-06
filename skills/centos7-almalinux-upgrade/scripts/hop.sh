@@ -7,6 +7,7 @@
 #   bash hop.sh answer             自动回答已知安全的问题（pam_pkcs11、确认无 VDO 后的 check_vdo）
 #   bash hop.sh up                 后台跑 leapp upgrade（下载+生成升级环境）并等待
 #   bash hop.sh reboot [容器...]    安全重启：只优雅停止有状态且 restart=always 的容器（及参数指定的），绝不 stop 全部
+#   bash hop.sh reboot --no-stop    不提前停止任何容器（业务方要求某些容器"不能动"时），交给 docker.service 关机时优雅停止
 #   bash hop.sh post   <MIRROR>    重启进入新版本后：检查成功标记 → 删 leapp/旧内核/残留 → 修 repo → dnf upgrade
 #   bash hop.sh status             看当前 leapp 进度
 # MIRROR 同 prep-el7.sh（https://mirrors.aliyun.com / http://mirrors.cloud.aliyuncs.com / https://repo.huaweicloud.com / upstream）
@@ -86,7 +87,8 @@ prep)
   KEYS=$(rpm -qa --qf '%{SIGPGP:pgpsig}\n' 2>/dev/null | grep -oiE "key id [0-9a-f]+" | awk '{print tolower($3)}' | sort -u)
   vend=""
   for r in /etc/leapp/files/vendors.d/*.repo; do
-    s=/etc/leapp/files/vendors.d/$(basename "$r" .repo).sigs
+    v=$(basename "$r" .repo); s=/etc/leapp/files/vendors.d/$v.sigs
+    rpm -q --qf '%{VENDOR}' "$v" 2>/dev/null | grep -qvE "AlmaLinux|CloudLinux|Red Hat|CentOS|not installed" && { vend="$vend $r"; continue; }   # 同名第三方包已装（如 docker-ce；leapp 装的包可能没有签名）
     [ -f "$s" ] || continue
     for k in $(grep -oiE "[0-9a-f]{16}" "$s" | tr 'A-F' 'a-f'); do echo "$KEYS" | grep -q "${k: -8}$\|$k" && { vend="$vend $r"; break; }; done
   done
@@ -143,6 +145,8 @@ EOF
   ;;
 
 answer)
+  # 7→8：floppy/pata_acpi 若又被加载（旧 initramfs 在黑名单之前构建），先卸载
+  if [ "$CUR" = 7 ]; then for m in floppy pata_acpi; do lsmod | grep -q "^$m " && rmmod "$m" && echo "rmmod $m"; done; fi
   grep -q "remove_pam_pkcs11_module_check" $LL/answerfile 2>/dev/null && leapp answer --section remove_pam_pkcs11_module_check.confirm=True && echo "pam_pkcs11 → True"
   if grep -q "check_vdo" $LL/answerfile 2>/dev/null; then
     if lsblk -o FSTYPE,TYPE 2>/dev/null | grep -qi vdo; then echo "!! 存在 VDO 设备，不能自动确认 check_vdo，需人工处理"
@@ -152,14 +156,24 @@ answer)
   if [ "$CUR" = 8 ] && grep -qE "^AllowZoneDrifting=yes" /etc/firewalld/firewalld.conf 2>/dev/null; then
     cp -a /etc/firewalld/firewalld.conf "$K/firewalld.conf.bak" && sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf && echo "firewalld AllowZoneDrifting → no（未 reload，重启后生效）"
   fi
+  # 9→10：EL10 没有 dhclient，NM 配置里的 dhcp=dhclient 是阻断项（Aliyun 等老镜像会带）。/etc 里的注释掉；/usr/lib 下不属于任何包的残留文件挪走
+  if [ "$CUR" = 9 ]; then
+    for f in $(grep -rl "^dhcp *= *dhclient" /etc/NetworkManager /usr/lib/NetworkManager/conf.d 2>/dev/null); do
+      case "$f" in
+        /etc/*) cp -a "$f" "$K/$(basename "$f").bak" && sed -i 's/^dhcp *= *dhclient/#&  # removed for EL10 (no dhclient)/' "$f" && echo "注释 dhcp=dhclient: $f";;
+        *) rpm -qf "$f" >/dev/null 2>&1 && echo "!! $f 属于 $(rpm -qf "$f")，请人工处理" || { mv "$f" "$K/" && echo "挪走残留 $f";} ;;
+      esac
+    done
+  fi
   # 9→10：ifcfg 旧网络配置 → NetworkManager keyfile（只改存储格式，不重连；迁移前后对比地址和默认路由）
-  if [ "$CUR" = 9 ] && ls /etc/sysconfig/network-scripts/ifcfg-* >/dev/null 2>&1; then
+  # 8→9 也可能需要：老镜像的 ifcfg 缺 TYPE=Ethernet，leapp 报 "Network configuration for unsupported device types"（NM ≥1.38 才有 migrate）
+  if [ "$CUR" -ge 8 ] && ls /etc/sysconfig/network-scripts/ifcfg-* >/dev/null 2>&1 && nmcli connection migrate --help >/dev/null 2>&1      && { [ "$CUR" = 9 ] || grep -q "unsupported device types" $LL/leapp-report.txt 2>/dev/null; }; then
     before=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
     cp -a /etc/sysconfig/network-scripts "$K/network-scripts.bak.$(date +%s)"
     nmcli connection migrate 2>&1 | tail -3
     after=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
     if [ "$before" = "$after" ]; then echo "ifcfg → keyfile 迁移完成，地址/默认路由不变"; else echo "!! 迁移前后网络有变化，立即检查:"; echo "$before"; echo "---"; echo "$after"; fi
-    ls /etc/sysconfig/network-scripts/ifcfg-* 2>/dev/null && echo "!! 仍有 ifcfg 文件未迁移"
+    ls /etc/sysconfig/network-scripts/ifcfg-* 2>/dev/null | grep -v "ifcfg-lo$" | grep . && echo "!! 仍有 ifcfg 文件未迁移（ifcfg-lo 除外）"
   fi
   grep -B1 -E "^# *confirm *=" $LL/answerfile 2>/dev/null | grep "^\[" | sed 's/^/仍未回答: /'
   ;;
@@ -167,7 +181,8 @@ answer)
 reboot)
   shift
   grep -q "Reboot the system" $K/leapp-up-$TGT.log 2>/dev/null || echo "WARN: 没看到本跳 leapp upgrade 成功的输出，确认是升级重启还是普通重启"
-  if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  NOSTOP=0; [ "$1" = --no-stop ] && { NOSTOP=1; shift; echo "--no-stop：不提前停止任何容器"; }
+  if [ $NOSTOP = 0 ] && command -v docker >/dev/null && docker info >/dev/null 2>&1; then
     for c in $(docker ps -q); do
       n=$(docker inspect -f '{{.Name}}' $c | tr -d /); img=$(docker inspect -f '{{.Config.Image}}' $c); pol=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' $c)
       want=0; echo "$img $n" | grep -qiE "mysql|mariadb|postgres|mongo|redis|elasticsearch|opensearch|clickhouse|kafka|zookeeper|etcd|minio|rabbitmq|influx|tdengine|nacos" && want=1
@@ -206,6 +221,17 @@ post)
   rm -rf /var/lib/leapp/el*userspace /var/lib/leapp/scratch /root/tmp_leapp_py3 /etc/leapp/files /etc/yum.repos.d/ELevate.repo
   oldk=$(rpm -qa 'kernel*' | grep -E "\.el${PREV}(_[0-9]+)?\.")
   [ -n "$oldk" ] && { echo "删除旧内核: $(echo $oldk | wc -w) 个包"; $PKG -y remove $oldk 2>&1 | tail -1; }
+  # EL7 内核的 %preun 调用 new-kernel-pkg（EL8 上没有，exit 127）→ dnf 删不掉：不跑脚本强删，再清理 /boot 和启动项
+  left=$(rpm -qa 'kernel*' | grep -E "\.el${PREV}(_[0-9]+)?\.")
+  if [ -n "$left" ]; then
+    echo "以 --noscripts 删除残留旧内核: $left"; rpm -e --noscripts --nodeps $left
+    for v in $(echo "$left" | grep -E "^kernel(-core)?-[0-9]" | sed -E 's/^kernel(-core)?-//'); do
+      rm -rf "/boot/vmlinuz-$v" "/boot/initramfs-$v.img" "/boot/initramfs-${v}kdump.img" "/boot/System.map-$v" "/boot/config-$v" "/boot/symvers-$v.gz" "/boot/.vmlinuz-$v.hmac" "/lib/modules/$v"
+      rm -f /boot/loader/entries/*"$v".conf
+    done
+    command -v grub2-mkconfig >/dev/null && [ -f /boot/grub2/grub.cfg ] && [ ! -d /boot/loader/entries ] && grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1
+    echo "默认内核: $(grubby --default-kernel 2>/dev/null)"
+  fi
   for e in /boot/loader/entries/*.conf; do k=$(awk '/^linux/{print $2}' "$e"); [ -n "$k" ] && [ ! -e "/boot${k#/boot}" ] && [ ! -e "$k" ] && { echo "删除失效启动项 $e"; rm -f "$e"; }; done
   cd /etc/yum.repos.d && mkdir -p disabled-for-upgrade
   mv ./*.rpmsave disabled-for-upgrade/ 2>/dev/null

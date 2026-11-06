@@ -5,6 +5,7 @@
 #   bash prep-el7.sh update             # 后台 yum update 到 7.9（排除 docker/containerd/openssh），等待完成
 #   bash prep-el7.sh pipfix             # 挪走 pip 装的、不属于 rpm 的 site-packages，并修复被覆盖的 python rpm
 #   bash prep-el7.sh inhibitors         # 处理已知 7→8 阻断项（驱动/kernel-devel/旧内核/mysql-libs/pam_pkcs11）
+#   bash prep-el7.sh netmgr [MIRROR]    # 还在用 network.service 时切到 NetworkManager（带自动回滚）
 #
 # MIRROR 取值（基础 URL，下面拼 /centos-vault /epel-archive /almalinux /epel /docker-ce）：
 #   https://mirrors.aliyun.com          阿里云公网（国内通用，实测最稳）
@@ -98,7 +99,11 @@ pipfix)
   ;;
 
 inhibitors)
-  echo "--- 1. 已移除驱动"; for m in floppy pata_acpi; do lsmod | grep -q "^$m " && { rmmod $m && echo "rmmod $m"; }; echo "blacklist $m" ; done > /etc/modprobe.d/leapp-removed-drivers.conf; cat /etc/modprobe.d/leapp-removed-drivers.conf
+  echo "--- 1. 已移除驱动"
+  for m in floppy pata_acpi; do lsmod | grep -q "^$m " && rmmod "$m" && echo "rmmod $m"; done
+  printf 'blacklist floppy\nblacklist pata_acpi\n' > /etc/modprobe.d/leapp-removed-drivers.conf; cat /etc/modprobe.d/leapp-removed-drivers.conf
+  # 黑名单要进 initramfs，否则重启后 pata_acpi 等会从旧 initramfs 再次加载（真实踩坑）
+  for k in $(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n'); do dracut -f "/boot/initramfs-$k.img" "$k" >/dev/null 2>&1 && echo "dracut 重建 $k"; done
   echo "--- 2. 多余 kernel-devel / 旧内核"
   cur=$(uname -r); extra=$(rpm -q kernel-devel 2>/dev/null | grep -v "not installed" | grep -v "${cur%.x86_64}")
   [ -n "$extra" ] && yum -y remove $extra 2>&1 | tail -1
@@ -115,6 +120,28 @@ inhibitors)
   rpm -qa --qf '%{NAME}\n' | grep -E "^(webtatic-release|nginx-release-centos|ius-release|remi-release|elrepo-release|mysql[0-9]*-community-release)$" | xargs -r yum -y remove 2>&1 | tail -1
   echo "完成。下一步：hop.sh prep <MIRROR>（会再检查 pip 冲突、装 ELevate；pam_pkcs11 等问题由 hop.sh answer 回答）"
   ;;
+
+netmgr)  # network.service → NetworkManager（EL8+ 以 NM 为准，EL9 起没有 network-scripts）；带自动回滚
+  [ "$(systemctl is-active NetworkManager)" = active ] && { echo "已在使用 NetworkManager"; exit 0; }
+  yum -y install NetworkManager 2>&1 | tail -1
+  cp -a /etc/sysconfig/network-scripts "$BK/network-scripts.before-nm.$(date +%s)"
+  sed -i '/^NM_CONTROLLED=/d' /etc/sysconfig/network-scripts/ifcfg-eth* 2>/dev/null   # NM_CONTROLLED=no 会让 NM 不接管
+  M=${2:-http://mirrors.cloud.aliyuncs.com}
+  cat > /root/os-upgrade-kit/netmgr-switch.sh <<EOF
+#!/bin/bash
+exec > /root/os-upgrade-kit/netmgr-switch.log 2>&1; set -x
+before="\$(ip -4 -o addr show scope global | awk '{print \$2,\$4}' | grep -v docker | sort)"
+systemctl enable NetworkManager; systemctl start NetworkManager; sleep 15
+nmcli -t -f DEVICE,STATE,CONNECTION dev status
+ok=0
+for i in 1 2 3 4 5 6; do ip route show default | grep -q . && curl -s -o /dev/null -m 5 "$M/" && { ok=1; break; }; sleep 5; done
+after="\$(ip -4 -o addr show scope global | awk '{print \$2,\$4}' | grep -v docker | sort)"
+if [ \$ok = 1 ] && echo "\$after" | grep -q eth0; then systemctl disable network; echo SWITCH_OK; echo "before: \$before"; echo "after: \$after"
+else echo ROLLBACK; systemctl stop NetworkManager; systemctl disable NetworkManager; systemctl restart network; fi
+EOF
+  chmod +x /root/os-upgrade-kit/netmgr-switch.sh; rm -f /root/os-upgrade-kit/netmgr-switch.log
+  systemd-run --unit="osup-netmgr-$(date +%s)" /root/os-upgrade-kit/netmgr-switch.sh >/dev/null
+  echo "已在后台切换（SSH 可能短暂抖动）。60 秒后用新连接查看 /root/os-upgrade-kit/netmgr-switch.log：SWITCH_OK 或 ROLLBACK" ;;
 
 *) sed -n '2,20p' "$0";;
 esac

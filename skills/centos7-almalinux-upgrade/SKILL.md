@@ -97,7 +97,7 @@ bash hop.sh pre               # 后台 preupgrade 并等待 → 自动 report
 bash hop.sh answer            # 已知安全问题自动回答；其余阻断项按 report 里的修复命令处理，再 pre，直到 0 阻断
 bash hop.sh report            # 重点看"将被删除的包"和"关键包去向"——有业务依赖的要先想办法
 bash hop.sh up                # 后台下载+生成升级环境
-bash hop.sh reboot [额外要停的容器名]   # 只停 restart=always 的有状态容器；VPN 容器和 unless-stopped 容器不碰
+bash hop.sh reboot [额外要停的容器名]   # 只停 restart=always 的有状态容器；VPN 容器和 unless-stopped 容器不碰；业务方说"别动"就用 --no-stop
 python remote.py HOST wait-ssh --timeout 3600   # 本机等；超时 → 控制台，见 references/recovery.md
 bash hop.sh post <MIRROR>     # 检查失败标记、清 leapp/旧内核/残留源、dnf upgrade
 bash verify.sh <BACKUP_DIR>   # FAIL 必须处理；WARN 判断是否预期
