@@ -35,6 +35,10 @@
 **CentOS 7 官方源已下线 / repo 文件重复定义（"Repository base is listed more than once"）**
 - 处理：`prep-el7.sh repos <MIRROR>` 统一成 centos-vault 7.9.2009 一个文件；不可达的第三方源自动禁用（否则 yum/leapp 卡住）。
 
+**★ `prep-el7.sh repos` 卡住 20 分钟：卡在 `yum repolist enabled`**
+- 原因：机器上有访问不了的第三方源（例如 pkgs.netbird.io），yum 对每个源都会长时间重试。
+- 处理：现在改为用 `curl -m 15` 逐个探测每个启用源的 repomd.xml（或 mirrorlist），不通就 `enabled=0`。实测 33 秒完成。另外所有 `CentOS-*.repo`（Vault、Debuginfo、Media 等）都会被挪走。
+
 **★ `yum update` 时某个 python 包 "Failed"：`cpio: rename` / `unpacking of archive failed`**
 - 原因：以前有人 `pip install` 到了系统 site-packages（例：pip 装的 urllib3 目录占了 rpm 要放的位置）。
 - 处理：`prep-el7.sh pipfix`：挪走所有不属于 rpm 的 site-packages 文件（备份可还原），重装被覆盖的 python rpm，补装失败的包。**每一跳前都要再查一次**（hop.sh prep 会做）。
@@ -90,7 +94,7 @@
 - 处理：vault 源的 repo id 用不会冲突的名字（`c8vault-*`），并在执行 deploy 前移走（`convert-el8.sh` 已修）。已经中招的话：移走 vault 源 → `dnf -y distro-sync --allowerasing` → 确认 `grubby --default-kernel` 是 AlmaLinux 内核 → 重启。
 - 判断标准：转换后 CentOS 厂商的包应只剩个位数（旧内核）。AlmaLinux 8 早期的包 vendor 显示为 **CloudLinux**，这是正常的。
 
-**★ Aliyun 镜像里的 cloud-init 是源码安装的（`rpm -q cloud-init` 显示未安装，但 unit 是启用状态）**
+**★ Aliyun 镜像里的 cloud-init 是源码安装的（`rpm -q cloud-init` 显示未安装，但 unit 是启用状态）**（3 台阿里云机器都遇到了；`hop.sh post` 现在会自动禁用并挪走这些不属于 rpm 的 unit）
 - 现象：升到 EL9 后，cloud-init 的 4 个 unit 都变成 failed（它依赖 EL8 的 python3.6）。
 - 处理：长期运行的 ECS 上，cloud-init 只在首次开机时有用。`touch /etc/cloud/cloud-init.disabled` 后执行 `systemctl reset-failed`。如果需要，就装发行版的 cloud-init 包。
 

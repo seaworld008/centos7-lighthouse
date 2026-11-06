@@ -18,6 +18,7 @@
 ## 索引
 | 日期 | 云 | 画像 | 路径 | 结果 | 报告 |
 |---|---|---|---|---|---|
+| 2026-11-06 | 阿里云 | 测试应用机：PHP 应用容器 ×4 + MySQL8/Redis 容器 + 宿主机 tarball MySQL 5.7 + cron docker exec | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（全程脚本，约 1.9 小时；修复 4 处） | [link](2026-11-06-aliyun-test-apps-hostmysql-centos7.md) |
 | 2026-11-06 | 阿里云 | 镜像仓库 Harbor + YApi + MySQL 容器 + 雷池 WAF + 自编译 LNMP | CentOS 7.6 → 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（首台全程用脚本完成的 CentOS 7；执行中修复 12 处脚本问题） | [link](2026-11-06-aliyun-registry-waf-lnmp-centos7.md) |
 | 2026-11-06 | 阿里云 | 堡垒机（JumpServer 11 个容器）+ openresty 容器 + firewalld | CentOS 8.3 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（首次全程使用脚本；执行中修复 9 处脚本问题） | [link](2026-11-06-aliyun-bastion-docker-centos8.md) |
 | 2026-11-05 | 华为云 | 跳板机 + Docker 业务 + VPN 路由 + 自编译 nginx | 7.7 → 8.10 → 9.8 → 10.2 | ✅ 成功（7→8 一次 initramfs 失败后救回） | [link](2026-11-05-huawei-jumphost-docker-vpn.md) |

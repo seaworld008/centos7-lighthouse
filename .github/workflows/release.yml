@@ -42,5 +42,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          title="v${{ steps.v.outputs.version }} — $(head -1 notes.md | cut -c1-80)"
+          title="v${{ steps.v.outputs.version }} — $(head -1 notes.md | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g' | cut -c1-70)"   # 标题里的 markdown 链接只保留文字
           gh release create "v${{ steps.v.outputs.version }}" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md --latest

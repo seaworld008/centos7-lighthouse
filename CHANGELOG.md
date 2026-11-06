@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
+第二台全程用脚本完成的 CentOS 7（阿里云测试应用机，7.9 → AlmaLinux 10.2，约 1.9 小时）。见 [实战报告](field-reports/2026-11-06-aliyun-test-apps-hostmysql-centos7.md)。
+
+### Fixed（均为 `verified-on-real-run`）
+- `prep-el7.sh repos`：不可达的第三方源（如 netbird）会让 `yum repolist` 卡 20 分钟 → 改为逐个用 curl 探测，不通就禁用；挪走所有 `CentOS-*.repo`；repolist 加超时（实测 33 秒）
+- `prep-el7.sh inhibitors`：先删旧内核，再重建 initramfs
+- `hop.sh post`：自动禁用并挪走源码安装的 cloud-init unit（阿里云老镜像，三台机器都遇到）
+- Release 工作流：标题里的 markdown 链接只保留文字
+
+### Verified
+- 上一版新增的 7→8 驱动卸载、EL7 内核 `--noscripts` 删除、9→10 的 dhclient/ifcfg 自动处理，在第二台机器上全部无需人工干预
+
 ## [0.3.0] - 2026-11-06
 
 第一台全程用脚本完成的 CentOS 7（阿里云多业务机，7.6 → AlmaLinux 10.2；Closes #5）。见 [实战报告](field-reports/2026-11-06-aliyun-registry-waf-lnmp-centos7.md)。
