@@ -35,7 +35,7 @@ bgrun() { # bgrun <name> <cmd>
 
 rewrite_mirrors() { # rewrite_mirrors <MIRROR> <files...>
   local M=$1; shift; [ "$M" = upstream ] && return 0
-  for f in "$@"; do [ -f "$f" ] || continue; cp -n "$f" "$f.orig" 2>/dev/null
+  for f in "$@"; do [ -f "$f" ] || continue; mkdir -p "$K/repo-orig"; cp -n "$f" "$K/repo-orig/$(basename "$f").orig" 2>/dev/null   # 备份放到工具目录，不污染 yum.repos.d
     sed -i -E \
       -e 's#^(mirrorlist=https?://mirrors\.almalinux\.org.*)#\#\1#' \
       -e "s#^\#? ?baseurl=https?://repo\.almalinux\.org/almalinux/#baseurl=$M/almalinux/#" \

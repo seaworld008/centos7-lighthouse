@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- `verify.sh`：先判断 unit 是否还存在。已卸载的 unit 也会返回 `ConditionResult=no`，以前会被误报为"条件不满足、预期跳过"，现在报 WARN，交给人判断（`verified-on-real-run`）
+- `hop.sh`：改写镜像时的 `.orig` 备份放到工具目录，不再留在 `/etc/yum.repos.d`
+
 ## [0.3.1] - 2026-11-06
 
 第二台全程用脚本完成的 CentOS 7（阿里云测试应用机，7.9 → AlmaLinux 10.2，约 1.9 小时）。见 [实战报告](field-reports/2026-11-06-aliyun-test-apps-hostmysql-centos7.md)。
