@@ -9,6 +9,7 @@
 - **快照**：ECS 控制台 → 实例 → 云盘 → 创建快照（或"快照一致性组"）。
 - **带外**：远程连接 → VNC（首次需设置 VNC 密码）。另有**云助手**（Cloud Assistant / aliyun-service）可在控制台下发命令，SSH 不通时很好用；升级后确认 `aliyun-service`/`assist-daemon` 仍运行。
 - **镜像源**：公网 `https://mirrors.aliyun.com`；ECS 内网 `http://mirrors.cloud.aliyuncs.com`（不耗公网流量，经典网络为 mirrors.aliyuncs.com）。路径统一：`/centos-vault/7.9.2009`、`/epel-archive/7`、`/almalinux`、`/epel`、`/docker-ce`、`/kubernetes-new`。
+- **实测**（2026-11，CentOS 8 → AlmaLinux 10）：内网镜像 `mirrors.cloud.aliyuncs.com` 的 almalinux、epel、docker-ce、centos-vault 都可用，延迟约 66ms；服务器**访问不了 raw.githubusercontent.com**；aegis、云助手、云监控三跳之后都正常运行；镜像自带的 cloud-init 是源码安装的，EL9 上会失效（禁用即可）
 - **agent**：云安全中心 aegis（/usr/local/aegis）、云监控 cloudmonitor/argusagent、云助手。升级后检查进程；aegis 可能对 leapp 的大量文件变更产生告警，提前告知安全负责人。
 - 阿里云官方另有"操作系统迁移（CentOS → Alibaba Cloud Linux）"工具，若用户不坚持 AlmaLinux 可作为备选，但本技能统一目标为 AlmaLinux 10。
 

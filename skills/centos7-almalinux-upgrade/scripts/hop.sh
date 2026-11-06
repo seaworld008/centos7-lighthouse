@@ -81,7 +81,16 @@ prep)
   pipfix
   echo "== 探测目标源（\$releasever=$TGT）:"
   bad=0
-  for u in $(grep -hE "^baseurl=" /etc/leapp/files/leapp_upgrade_repositories.repo | head -3) $(awk '/^\[/{e=0} /^enabled *= *1/{e=1} /^baseurl=/{b=$0} e&&b{print b; b=""}' /etc/leapp/files/vendors.d/*.repo | sort -u); do
+  # 厂商源只探测本机在用的：leapp 按 <vendor>.sigs 里的签名 key 与已安装包的签名匹配来启用厂商源（PES 可能是空的，如 docker-ce）
+  KEYS=$(rpm -qa --qf '%{SIGPGP:pgpsig}\n' 2>/dev/null | grep -oiE "key id [0-9a-f]+" | awk '{print tolower($3)}' | sort -u)
+  vend=""
+  for r in /etc/leapp/files/vendors.d/*.repo; do
+    s=/etc/leapp/files/vendors.d/$(basename "$r" .repo).sigs
+    [ -f "$s" ] || continue
+    for k in $(grep -oiE "[0-9a-f]{16}" "$s" | tr 'A-F' 'a-f'); do echo "$KEYS" | grep -q "${k: -8}$\|$k" && { vend="$vend $r"; break; }; done
+  done
+  echo "  使用中的厂商源:${vend:- 无}"
+  for u in $(grep -hE "^baseurl=" /etc/leapp/files/leapp_upgrade_repositories.repo | head -3) $( [ -n "$vend" ] && awk '/^\[/{e=0} /^enabled *= *1/{e=1} /^baseurl=/{b=$0} e&&b{print b; b=""}' $vend | sort -u); do
     url=$(echo "${u#baseurl=}" | sed -e "s/\$releasever/$TGT/g" -e 's/\$basearch/x86_64/g' -e 's/\${stream:+s}//g' -e "s/\$releasever_major/$TGT/g")
     code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "${url%/}/repodata/repomd.xml"); echo "  $code  $url"; [ "$code" = 200 ] || bad=$((bad+1))
   done
@@ -90,7 +99,7 @@ prep)
   ;;
 
 pre)
-  bgrun leapp-pre-$TGT "leapp preupgrade"; "$0" report ;;
+  bgrun leapp-pre-$TGT "leapp preupgrade"; bash "$0" report ;;
 
 up)
   bgrun leapp-up-$TGT "leapp upgrade"
@@ -138,6 +147,19 @@ answer)
     if lsblk -o FSTYPE,TYPE 2>/dev/null | grep -qi vdo; then echo "!! 存在 VDO 设备，不能自动确认 check_vdo，需人工处理"
     else $PKG -y install vdo >/dev/null 2>&1; leapp answer --section check_vdo.confirm=True && echo "check_vdo → True（已确认无 VDO 设备）"; fi
   fi
+  # 8→9：firewalld AllowZoneDrifting 已在 EL9 移除，EL9 的行为等同于 no。只改配置、不 reload（reload 可能清掉 docker 的 iptables 链）
+  if [ "$CUR" = 8 ] && grep -qE "^AllowZoneDrifting=yes" /etc/firewalld/firewalld.conf 2>/dev/null; then
+    cp -a /etc/firewalld/firewalld.conf "$K/firewalld.conf.bak" && sed -i 's/^AllowZoneDrifting=.*/AllowZoneDrifting=no/' /etc/firewalld/firewalld.conf && echo "firewalld AllowZoneDrifting → no（未 reload，重启后生效）"
+  fi
+  # 9→10：ifcfg 旧网络配置 → NetworkManager keyfile（只改存储格式，不重连；迁移前后对比地址和默认路由）
+  if [ "$CUR" = 9 ] && ls /etc/sysconfig/network-scripts/ifcfg-* >/dev/null 2>&1; then
+    before=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
+    cp -a /etc/sysconfig/network-scripts "$K/network-scripts.bak.$(date +%s)"
+    nmcli connection migrate 2>&1 | tail -3
+    after=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
+    if [ "$before" = "$after" ]; then echo "ifcfg → keyfile 迁移完成，地址/默认路由不变"; else echo "!! 迁移前后网络有变化，立即检查:"; echo "$before"; echo "---"; echo "$after"; fi
+    ls /etc/sysconfig/network-scripts/ifcfg-* 2>/dev/null && echo "!! 仍有 ifcfg 文件未迁移"
+  fi
   grep -B1 -E "^# *confirm *=" $LL/answerfile 2>/dev/null | grep "^\[" | sed 's/^/仍未回答: /'
   ;;
 
@@ -167,6 +189,17 @@ post)
     grep -E "install failed|erase failed|scriptlet failed|rror unpacking" $LL/leapp-upgrade.log | head -10; exit 1
   fi
   uname -r | grep -q "el$CUR" || echo "WARN: 运行内核不是 el$CUR，检查 grub 默认项"
+  # 关键：等 leapp 的首次启动阶段（leapp_resume.service，FirstBoot 收尾）跑完再清理。
+  # 真实踩坑：SSH 一恢复就删 leapp，正在运行的 removeleftoverpackages 报 ModuleNotFoundError，FirstBoot 中断
+  t=0; while [ $t -lt 1800 ]; do
+    st=$(systemctl show -p ActiveState --value leapp_resume.service 2>/dev/null)
+    case "$st" in active|activating|reloading) [ $((t % 60)) = 0 ] && echo "  等待 leapp_resume.service 完成（$st，${t}s）"; sleep 10; t=$((t+10));; *) break;; esac
+  done
+  if [ "$(systemctl show -p ActiveState --value leapp_resume.service 2>/dev/null)" = failed ]; then
+    echo "WARN: leapp_resume.service 失败（leapp 首次启动收尾没完成），日志："; journalctl -u leapp_resume -b --no-pager -o cat 2>/dev/null | grep -E "Error|ERROR|failed" | tail -5
+    echo "      本脚本会接着清理残留包/内核；检查报告 $LL/leapp-report.txt 里 FirstBoot 阶段的条目"
+  fi
+  systemctl disable leapp_resume.service >/dev/null 2>&1; rm -f /etc/systemd/system/leapp_resume.service; systemctl daemon-reload; systemctl reset-failed leapp_resume.service 2>/dev/null
   clear_leapp_excludes
   rpm -qa | grep -E "^(leapp|python[23]?-leapp|snactor|elevate-release|leapp-upgrade|leapp-data|leapp-deps|leapp-repository|kernel-workaround)" | xargs -r rpm -e --nodeps
   rm -rf /var/lib/leapp/el*userspace /var/lib/leapp/scratch /root/tmp_leapp_py3 /etc/leapp/files /etc/yum.repos.d/ELevate.repo
@@ -179,7 +212,9 @@ post)
   # 指向旧版本的残留 repo（硬编码 /7/ /8/ /9/ 或 el7/el8/el9 的第三方源）挪走
   for f in ./*.repo; do grep -qE "^baseurl=.*(/|el|centos)${PREV}(/|\b)" "$f" && ! grep -qE '\$releasever' "$f" && { echo "挪走硬编码 EL$PREV 的源: $f"; mv "$f" disabled-for-upgrade/; }; done
   [ -f elrepo.repo ] && mv elrepo.repo disabled-for-upgrade/
-  rewrite_mirrors "$M" /etc/yum.repos.d/almalinux*.repo /etc/yum.repos.d/epel*.repo /etc/yum.repos.d/docker-ce.repo
+  rewrite_mirrors "$M" /etc/yum.repos.d/almalinux*.repo /etc/yum.repos.d/epel.repo /etc/yum.repos.d/epel-testing.repo /etc/yum.repos.d/docker-ce.repo
+  # epel-cisco-openh264 只有 metalink（codecs.fedoraproject.org，国内常不可达）、镜像站也没有：关掉，避免 dnf 报 Cannot find a valid baseurl
+  [ -f epel-cisco-openh264.repo ] && sed -i 's/^enabled=1/enabled=0/' epel-cisco-openh264.repo
   cd - >/dev/null || true
   $PKG clean all >/dev/null; $PKG makecache 2>&1 | grep -iE "error|fail|Metadata cache" | head -5
   bgrun dnfup-el$CUR "$PKG -y upgrade --nobest"

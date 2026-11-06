@@ -48,6 +48,36 @@
 - 原因：它替换了 `mariadb-libs` 提供的 libmysqlclient.so.18，postfix 依赖它。
 - 处理：`yum swap -- remove mysql-community-* -- install mariadb-libs`（`prep-el7.sh inhibitors` 已做）；宿主机若装了 mysql-community-server 则不要自动处理。
 
+## 2b. 源系统是 CentOS Linux 8 / Stream 8
+
+**★ 资产表写的是"CentOS 7"，实际上是 CentOS 8.3**
+- 处理：一律以 `survey.sh` 的结果为准。CentOS 8 要先 `convert-el8.sh` 转成 AlmaLinux 8，ELevate 只接受 AlmaLinux/Rocky/RHEL 8 作为 8→9 的源。
+
+**★ `almalinux-deploy`：`Please upgrade your OS from 8.3 to … ERROR`**
+- 原因：要求 ≥ 8.4。
+- **不要用它的 `-f`**：`-f` 只认 `CentOS-Linux-BaseOS.repo` 这类原始文件名（否则报 `Error: No repo file found for BaseOS`），并会把源改到海外的 rackspace vault。
+- 处理：`convert-el8.sh update`，用自己配好的国内 vault 源 `dnf upgrade` 到 8.5，再 `convert-el8.sh run`（默认 `-d`）。
+
+**★ EL8 机器上配着 EPEL 7（`epel.repo` 里是 `epel/7`）**
+- 风险：distro-sync / leapp 会从错误的大版本拉包。
+- 处理：`convert-el8.sh prep` 会改成 EPEL 8。`survey.sh` 会对 EPEL 版本与系统不一致报 HIGH。
+
+**★ 国内服务器访问不了 `raw.githubusercontent.com`**
+- 处理：在本机下载 `almalinux-deploy.sh` 后用 `remote.py put` 上传。`-l=<MIRROR>/almalinux` 让它走国内镜像（阿里云内网 `mirrors.cloud.aliyuncs.com` 实测 66ms）。
+
+**★ CentOS 8 的 repo 指向已下线的 `centos/8-stream`**
+- 处理：改成 vault：CentOS Linux 8 用 `centos-vault/8.5.2111`，Stream 用 `centos-vault/8-stream`。
+
+**★ almalinux-deploy 显示"Migration to AlmaLinux is completed"，但 680 个包还是 CentOS 的，内核也还是 CentOS 的**
+- 现象：`distro-sync OK`，但 `rpm -qa --qf '%{VENDOR}\n' | sort | uniq -c` 里几乎全是 CentOS；`dnf upgrade` 显示 Nothing to do；日志里有 `Repository baseos is listed more than once`。
+- 原因：自己写的 vault 源用了 `[baseos]/[appstream]/[extras]`，与 AlmaLinux 的 repo id 冲突，dnf 选用了 CentOS 的定义，distro-sync 实际同步回了 CentOS 8.5。vault 源不属于任何 rpm，almalinux-deploy 不会删除它。
+- 处理：vault 源的 repo id 用不会冲突的名字（`c8vault-*`），并在执行 deploy 前移走（`convert-el8.sh` 已修）。已经中招的话：移走 vault 源 → `dnf -y distro-sync --allowerasing` → 确认 `grubby --default-kernel` 是 AlmaLinux 内核 → 重启。
+- 判断标准：转换后 CentOS 厂商的包应只剩个位数（旧内核）。AlmaLinux 8 早期的包 vendor 显示为 **CloudLinux**，这是正常的。
+
+**★ Aliyun 镜像里的 cloud-init 是源码安装的（`rpm -q cloud-init` 显示未安装，但 unit 是启用状态）**
+- 现象：升到 EL9 后，cloud-init 的 4 个 unit 都变成 failed（它依赖 EL8 的 python3.6）。
+- 处理：长期运行的 ECS 上，cloud-init 只在首次开机时有用。`touch /etc/cloud/cloud-init.disabled` 后执行 `systemctl reset-failed`。如果需要，就装发行版的 cloud-init 包。
+
 ## 3. 7 → 8
 
 | 阻断项 / 报错 | 处理 |
@@ -71,6 +101,7 @@
 | 阻断项 / 报错 | 处理 |
 |---|---|
 | ★ `Cannot perform the VDO check of block devices` | `dnf install vdo`（让检查能跑），确认无 VDO 设备后 `leapp answer --section check_vdo.confirm=True`（hop.sh answer 自动） |
+| ★ `Firewalld Configuration AllowZoneDrifting Is Unsupported` | `AllowZoneDrifting=no`（EL9 行为本来就等同于 no）；`hop.sh answer` 自动处理。**不要 `firewall-cmd --reload`**：可能清掉 Docker 的 iptables 链，导致容器网络断开，重启时自然生效 |
 | ★ 安装 el8 的 leapp 时 `filtered out by exclude filtering` | 上一跳 leapp 在 /etc/dnf/dnf.conf、/etc/yum.conf 留了 `exclude=...leapp...`，删掉（hop.sh 已处理） |
 | ★ 旧 el7 leapp 包残留导致 el8 leapp 装不上 | `rpm -e --nodeps` 删旧 leapp 包 + 删 /etc/leapp/files（hop.sh prep/post 已处理） |
 | `Remote root logins globally allowed using password` | 若 sshd_config 显式写了 `PermitRootLogin yes` 则只是提示；**没写的话 EL9 默认 prohibit-password，root 密码登录会失联**，先显式写上 |
@@ -88,6 +119,18 @@
 | ★ 事务里会删掉 java-1.8.0/11/17-openjdk、redis、dhcp-client 等 | 用 `hop.sh report` 看"将被删除的包"：宿主机直接跑 Java 8/11/17 程序的要改用容器或自带 JDK；NetworkManager 配了 `dhcp=dhclient` 的要先改回 internal |
 
 ## 6. 每跳重启后
+
+**★ `leapp_resume.service` failed：`ModuleNotFoundError: No module named 'leapp.libraries.common.rhsm'`**
+- 原因：重启后 SSH 一恢复，就马上执行了清理（删除 leapp 包和 /etc/leapp），而 leapp 的 FirstBoot 阶段（`leapp_resume.service`，含 removeleftoverpackages 等）还在跑，被删掉了自己的模块。
+- 处理：`hop.sh post` 现在会先等 `leapp_resume.service` 结束（最多 30 分钟）再清理；它失败时会打印日志并继续清理残留包和内核，最后删掉这个临时 unit。
+- 教训：SSH 能连上 ≠ 升级流程已经结束。
+
+**dbus.service 在 EL9 上"没有运行"** → 被 `dbus-broker.service` 取代，属于预期（verify.sh 已映射）。
+**sssd / smartd / vdo / rngd-wake-threshold "没有运行"** → 新版本 unit 带启动条件，没有配置就跳过（verify.sh 会识别 `ConditionResult=no`）。
+
+**★ `Error: Cannot find a valid baseurl for repo: epel-cisco-openh264`**
+- 原因：这个源只有 metalink（codecs.fedoraproject.org），镜像站没有它；改写镜像时把 metalink 注释掉了，导致没有任何可用地址。
+- 处理：`hop.sh post` 改写镜像时跳过它并将其 `enabled=0`（极少需要 openh264）。
 
 **★ 旧 repo 文件仍指向 EL7/EPEL7，`dnf distro-sync` 报一堆 "nothing provides … from epel"**
 - 原因：用户改过的 repo 文件不会被覆盖，新版本放在 `*.rpmnew`；旧文件以 `*.rpmsave` 留下。
@@ -120,3 +163,7 @@
 **`pkill`/`docker stop` 后 VPN 断开、无法登录**：见 recovery.md "失联"。
 
 **★ 证书即将过期**：迁移 nginx 时顺手 `openssl x509 -noout -enddate` 检查，写进报告。
+
+**★ nginx/openresty 跑在容器里，基线漏掉了所有站点**
+- 现象：宿主机 `pgrep nginx` 能看到 master 进程，但路径（如 `/usr/servers/nginx/sbin/nginx`）在宿主机上不存在；老版本 nginx（<1.9.2）也没有 `-T`。
+- 处理：`state.sh` 会进入 nginx/openresty/tengine 容器读取 server_name；没有 `-T` 时读取容器挂载点和常见目录下的 `*.conf`。另外所有 TCP 端口都按 IP 探测一次，443 用 https。
