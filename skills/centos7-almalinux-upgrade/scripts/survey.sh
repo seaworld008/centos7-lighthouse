@@ -89,7 +89,9 @@ echo "NetworkManager=$(systemctl is-active NetworkManager 2>/dev/null) network.s
 ls /etc/sysconfig/network-scripts/ifcfg-* 2>/dev/null
 ls /etc/sysconfig/network-scripts/ifcfg-* >/dev/null 2>&1 && flag INFO "ifcfg 网络配置：9→10 前必须 nmcli connection migrate 转 keyfile（leapp 阻断项）"
 [ "$(systemctl is-active NetworkManager 2>/dev/null)" != "active" ] && flag HIGH "NetworkManager 未运行（用的 network.service）：EL8+ 以 NM 为准，升级前先切到 NM 并验证网络"
-grep -rqs "dhcp=dhclient" /etc/NetworkManager/ && flag HIGH "NetworkManager 配了 dhcp=dhclient：EL10 没有 dhclient，升级后可能拿不到 IP"
+grep -rqs "^dhcp *= *dhclient" /etc/NetworkManager/ /usr/lib/NetworkManager/conf.d/ && flag HIGH "NetworkManager 配了 dhcp=dhclient（注意 /usr/lib 下也可能有不属于任何包的残留文件）：EL10 没有 dhclient，是 9→10 阻断项；hop.sh answer 会处理"
+for f in /etc/sysconfig/network-scripts/ifcfg-*; do [ -e "$f" ] || continue; case "$f" in *ifcfg-lo) continue;; esac; grep -q "^TYPE=" "$f" || flag MEDIUM "$(basename "$f") 没有 TYPE=：8→9 时 leapp 会报 unsupported device types（hop.sh answer 会用 nmcli connection migrate 处理）"; done
+systemctl is-enabled iptables >/dev/null 2>&1 && flag INFO "iptables.service 已启用：EL9 起包名是 iptables-nft-services，8→9 会删除旧包；先看 /etc/sysconfig/iptables 里有没有真实规则"
 echo "--- VPN / 隧道 / 访问路径:"
 VPN=$(ps -eo comm,args 2>/dev/null | grep -iE "netbird|wireguard|wg-quick|openvpn|tailscale|zerotier|frpc|frps|strongswan|charon|softether|nps|npc" | grep -v grep)
 ip -br link 2>/dev/null | grep -iE "wg|wt0|tun|tap|zt" ; echo "$VPN" | cut -c1-150

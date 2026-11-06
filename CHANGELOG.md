@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+第一台全程用脚本完成的 CentOS 7（阿里云多业务机，7.6 → AlmaLinux 10.2；Closes #5）。见 [实战报告](field-reports/2026-11-06-aliyun-registry-waf-lnmp-centos7.md)。
+
+### Added
+- `prep-el7.sh netmgr`：network.service → NetworkManager，失败自动回滚（`verified-on-real-run`）
+- `hop.sh answer`：7→8 时卸载 floppy/pata_acpi；8→9 时遇到 ifcfg "unsupported device types" 用 `nmcli connection migrate` 处理；9→10 时处理 `dhcp=dhclient`（/etc 里的注释掉，/usr/lib 下不属于任何包的残留文件挪走）（`verified-on-real-run`）
+- `hop.sh reboot --no-stop`：业务方要求某些容器不能动时，不提前停止任何容器
+- `survey.sh`：/usr/lib 下的 dhcp=dhclient 报 HIGH；ifcfg 缺 `TYPE=` 报 MEDIUM；启用了 iptables.service 报 INFO
+- 文档：Harbor 开机 syslog 日志驱动竞争（autostart unit）、ssmtp 被删、LNMP 日志目录 777 导致 logrotate 跳过
+
+### Fixed（均为 `verified-on-real-run`）
+- `hop.sh post`：EL7 内核的 %preun 调用 new-kernel-pkg（exit 127）导致删不掉 → `rpm -e --noscripts` 后清理 /boot、/lib/modules 和启动项
+- `prep-el7.sh inhibitors`：黑名单文件里混进了 "rmmod" 行；写黑名单后重建 initramfs，避免重启后模块再次被加载
+- `nginx-static-build.sh`：`--with-openssl-opt` 被截断；老版本签名公钥改从 keyserver 获取；sha256 不符时删除文件并提示手动上传；`--install` 参数被 `set --` 覆盖；用 mv 替换运行中的二进制
+- `hop.sh prep`：同名第三方包已安装（leapp 装的 docker-ce 没有签名）也算作在用的厂商源
+
 ## [0.2.0] - 2026-11-06
 
 第一次全程使用技能脚本的真实执行（阿里云，CentOS 8.3 → AlmaLinux 10.2），新增 CentOS 8 源路径和批量工具。

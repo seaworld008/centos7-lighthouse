@@ -42,6 +42,7 @@
   - 兼容 shim：在 compose 里给该服务挂 `./cgroupv1-shim:/sys/fs/cgroup:ro`，shim 目录里放 `memory/memory.limit_in_bytes`（9223372036854771712）和 `memory/memory.usage_in_bytes`（0）。`finalize.sh cgroupv1-shim <目录>` 生成文件。长期方案是升级应用版本。
   - JDK 8u372 之前的容器不识别 cgroup v2 内存限制（会按宿主机内存算堆大小）；显式写了 -Xmx 的不受影响。
 - Docker 19.03 不支持 cgroup v2；必须随 leapp 升级到新版。
+- **Harbor**：开机时 core/registry/nginx 等容器会因为 syslog 日志驱动连不上 harbor-log（127.0.0.1:1514）而 exited，Docker 不会重试。加一个 oneshot unit（After=docker.service）：循环等 1514 可用，然后 `docker ps -aq --filter label=com.docker.compose.project=<项目> --filter status=exited | xargs -r docker start`。
 
 ## Java
 

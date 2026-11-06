@@ -2,10 +2,11 @@
 
 方向：从"一次成功的经验"走向"任何一台 CentOS 7 都能被 agent 安全、可预期地升级"。
 
-## v0.2 — 回归实测（v0.2.0 已发布，剩余项转入 v0.2.x）
+## v0.2 / v0.3 — 回归实测
 - [x] 第一次全程使用脚本的真实执行：阿里云 CentOS 8.3 → AlmaLinux 10.2，并新增 CentOS 8 源路径（`convert-el8.sh`）
 - [x] `prep-el7.sh` repos/pipfix/inhibitors 与 `swap-openssh.sh` 的检测路径进入 CI（centos:7 容器中真实执行）
-- [ ] 在真实 CentOS 7 上只用脚本跑完一次（7→8 这一跳、`prep-el7.sh update`、`swap-openssh.sh` 的实际替换）——[#5](https://github.com/seaworld008/centos7-lighthouse/issues/5)
+- [x] 在真实 CentOS 7 上只用脚本跑完一次（阿里云，7.6 → 10.2）——[#5](https://github.com/seaworld008/centos7-lighthouse/issues/5)
+- [ ] 在真实机器上用 `swap-openssh.sh` 替换一次自编译 openssh
 - [x] 阿里云首份 field report
 - [ ] AWS 首份 field report——[#7](https://github.com/seaworld008/centos7-lighthouse/issues/7)
 - [x] `fleet_summary.py`：汇总多台 survey → 分类 → 金丝雀与批次建议（[#6](https://github.com/seaworld008/centos7-lighthouse/issues/6)）
