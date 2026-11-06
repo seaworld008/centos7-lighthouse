@@ -1,0 +1,16 @@
+changelog:
+  exclude:
+    labels: [ignore-for-release]
+  categories:
+    - title: 🕳️ 新坑与修复 / Pitfalls & fixes
+      labels: [pitfall, bug]
+    - title: 📋 实战报告 / Field reports
+      labels: [field-report]
+    - title: 🧰 脚本与技能 / Scripts & skill
+      labels: [area:scripts, area:skill]
+    - title: 📚 文档 / Docs
+      labels: [area:docs]
+    - title: ⚙️ CI 与工具 / CI & tooling
+      labels: [area:ci]
+    - title: 其它 / Other
+      labels: ["*"]

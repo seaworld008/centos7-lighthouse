@@ -11,10 +11,12 @@ for h in $(python remote.py --list | cut -f2); do
     python remote.py $h run "bash /root/os-upgrade-kit/survey.sh" --timeout 600 > fleet/$h/survey.txt 2>&1 ) &
 done; wait
 grep -H "^\[BLOCKER\]\|^\[HIGH\]" fleet/*/survey.txt
+python $S/fleet_summary.py fleet/ --groups groups.csv --batch 5 > fleet/summary.md   # 分类 + 金丝雀 + 批次建议
 ```
+`groups.csv` 的列是 `host,group`，同一 group（例如同一业务的主备、同一集群）不会排进同一批。
 每台建目录 `fleet/<host>/`：survey.txt、decisions.md（用户确认的去留决定）、log.md（每步做了什么）、report.md。
 
-## 3. 分类
+## 3. 分类（`fleet_summary.py` 按下表自动判断）
 | 类 | 特征 | 策略 |
 |---|---|---|
 | A 简单 | 无 BLOCKER，只有系统服务/少量容器 | 批量升级，脚本流程基本不用改 |

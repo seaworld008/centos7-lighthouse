@@ -52,7 +52,7 @@ CentOS 7 已于 **2024 年 6 月停止维护**，不再有安全补丁。AI 时�
   - nginx.org 最新稳定版，配好 TLS 1.2/1.3
   - kubectl 对齐集群版本，helm 升到最新
   - Docker 和 compose v2，postfix 改用 lmdb
-- 🚀 **批量推进**：并行勘察 → 分类 → 金丝雀 → 分批（阿里云 / 华为云 / AWS）
+- 🚀 **批量推进**：并行勘察 → `fleet_summary.py` 自动分类（A/B/C/D、VPN、CentOS 8）→ 金丝雀 → 分批（同业务主备不同批）
 - 🤖 **为 AI agent 设计**：Claude Code 技能 + 插件。Agent 按流程执行，遇到需要人拍板的事会停下来问你
 
 ## 🚀 快速开始
@@ -110,8 +110,10 @@ flowchart LR
 |---|---|
 | 完整流程（人工命令） | ✅ 华为云生产机 CentOS 7.7 → AlmaLinux 10.2 走通，业务全部恢复（[实战报告](field-reports/2026-11-05-huawei-jumphost-docker-vpn.md)） |
 | 全程使用脚本：`convert-el8.sh` `hop.sh`（8→9→10） `verify.sh` | ✅ 阿里云堡垒机 CentOS 8.3 → AlmaLinux 10.2，12 个容器、11 个站点和基线一致，最终重启测试通过（[实战报告](field-reports/2026-11-06-aliyun-bastion-docker-centos8.md)） |
-| `survey.sh` `backup.sh` `state.sh` `verify.sh` `hop.sh report` | ✅ 真实 EL10 机器实测；CI 在 CentOS 7 / AlmaLinux 8/9/10 容器中冒烟测试 |
-| `prep-el7.sh` `swap-openssh.sh`、7→8 这一跳、`finalize.sh` | ⚠️ 由真实迁移中执行过的命令整理而成，尚未作为脚本在新的 CentOS 7 上回归（[#5](https://github.com/seaworld008/centos7-lighthouse/issues/5)） |
+| `survey.sh` `backup.sh` `state.sh` `verify.sh` `hop.sh report` | ✅ 真实机器实测；CI 在 CentOS 7 / AlmaLinux 8/9/10 容器中冒烟测试 |
+| `prep-el7.sh repos/pipfix/inhibitors`、`swap-openssh.sh` 的检测路径 | ✅ CI 在 centos:7 容器里真实执行（会修改系统的测试只在容器内运行） |
+| `fleet_summary.py` | ✅ 单元测试 + 真实 survey 数据 |
+| `prep-el7.sh update`、`swap-openssh.sh` 的实际替换、7→8 这一跳、`finalize.sh` | ⚠️ 由真实迁移中执行过的命令整理而成，还需要一台真实 CentOS 7 跑一遍脚本（[#5](https://github.com/seaworld008/centos7-lighthouse/issues/5)） |
 
 **先在非关键机器上试，并做好整机快照。**
 

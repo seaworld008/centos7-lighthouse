@@ -31,7 +31,9 @@ jobs:
           shellcheck --version
           shellcheck -S warning -e SC2010 -s bash skills/*/scripts/*.sh tests/*.sh
       - name: Python compile
-        run: python -m py_compile skills/*/scripts/*.py tools/*.py
+        run: python -m py_compile skills/*/scripts/*.py tools/*.py tests/*.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
 
   plugin:
     name: Claude Code plugin manifests

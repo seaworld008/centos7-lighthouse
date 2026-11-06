@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
+第一次全程使用技能脚本的真实执行（阿里云，CentOS 8.3 → AlmaLinux 10.2），新增 CentOS 8 源路径和批量工具。
+
 ### Added
 - `convert-el8.sh`：源系统为 CentOS Linux 8 / Stream 8 时，先用官方 almalinux-deploy 转成 AlmaLinux 8，再走 8→9→10。子命令为 `prep` / `update` / `run` / `post`（`verified-on-real-run`，阿里云）
 - `survey.sh`：CentOS 8 源系统报 BLOCKER；`epel.repo` 版本与系统不一致报 HIGH；nginx 跑在容器里时不再误报"文件不存在"
@@ -24,6 +28,13 @@
 - `convert-el8.sh` 自建的 vault 源与 AlmaLinux 的 repo id 冲突，导致 distro-sync 实际同步回 CentOS → 改用 `c8vault-*` 并在转换前移走（`verified-on-real-run`）
 - `hop.sh post` 与 leapp_resume 竞争，导致 FirstBoot 中断（`verified-on-real-run`：9→10 时已正确等待）
 - `hop.sh report` 在 EL7（py2）和 EL8（py3.6）的 `LC_ALL=C` 环境下输出中文时崩溃（由 CI 冒烟测试发现）
+
+### Added (tooling)
+- Release 工作流：main 上版本号变化后，自动从 CHANGELOG 生成 Release（`tools/changelog_section.py`）
+- `fleet_summary.py`：汇总多台机器的 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批）（#6；单元测试 + 真实数据）
+- CI：单元测试；centos:7 容器中真实执行 `prep-el7.sh repos/pipfix/inhibitors` 与 `swap-openssh.sh` 的检测路径（会修改系统的测试只在容器里运行）
+- `swap-openssh.sh`：没装 openssh-server 时直接退出
+- `.github/release.yml` 按标签生成发布说明分类；CODEOWNERS；main 分支保护（必须通过 CI）
 
 ### Changed
 - ci: actions/checkout v7、setup-python v7、setup-node v7、gitleaks-action v3（Node 24 运行时）
