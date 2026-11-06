@@ -15,6 +15,8 @@
 - `hop.sh answer`：9→10 自动执行 `nmcli connection migrate`，并对比迁移前后的地址和默认路由
 - `hop.sh post`：先等 leapp FirstBoot（`leapp_resume.service`）结束再清理；禁用只有 metalink 的 epel-cisco-openh264
 - `verify.sh`：dbus → dbus-broker 映射；30 秒内 RestartCount 仍在增长的容器判为 FAIL（crash-loop 检测）
+- `bgrun`（hop.sh / convert-el8.sh / prep-el7.sh）把后台命令的退出码传出来；`convert-el8.sh update` 失败或升级后仍低于 8.4 时停止
+- `hop.sh post`：镜像改写覆盖所有 `epel*.repo`（含 EL8 的 epel-modular，并设 `skip_if_unavailable=1`），只排除 cisco-openh264
 - 实战报告：[阿里云堡垒机 CentOS 8.3 → AlmaLinux 10.2](field-reports/2026-11-06-aliyun-bastion-docker-centos8.md)
 
 ### Fixed

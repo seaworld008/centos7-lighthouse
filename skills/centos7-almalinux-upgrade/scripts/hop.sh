@@ -23,7 +23,8 @@ bgwait() { # bgwait <logfile>：等待 __RC= 行
   local log=$1 t=0
   until grep -q "^__RC=" "$log" 2>/dev/null; do
     sleep 15; t=$((t+15)); [ $((t % 180)) = 0 ] && echo "  ...${t}s $(grep -v '^\s*$' "$log" 2>/dev/null | tail -1 | cut -c1-110)"
-  done; grep "^__RC=" "$log"
+  done
+  local rc; rc=$(sed -n 's/^__RC=//p' "$log" | tail -1); echo "__RC=${rc:-?}"; return "${rc:-1}"   # 把后台命令的退出码传出去
 }
 bgrun() { # bgrun <name> <cmd>
   local log=$K/$1.log; rm -f "$log"
@@ -212,12 +213,16 @@ post)
   # 指向旧版本的残留 repo（硬编码 /7/ /8/ /9/ 或 el7/el8/el9 的第三方源）挪走
   for f in ./*.repo; do grep -qE "^baseurl=.*(/|el|centos)${PREV}(/|\b)" "$f" && ! grep -qE '\$releasever' "$f" && { echo "挪走硬编码 EL$PREV 的源: $f"; mv "$f" disabled-for-upgrade/; }; done
   [ -f elrepo.repo ] && mv elrepo.repo disabled-for-upgrade/
-  rewrite_mirrors "$M" /etc/yum.repos.d/almalinux*.repo /etc/yum.repos.d/epel.repo /etc/yum.repos.d/epel-testing.repo /etc/yum.repos.d/docker-ce.repo
+  EPELS=""; for f in /etc/yum.repos.d/epel*.repo; do [ -e "$f" ] || continue; case "$f" in *cisco-openh264*) ;; *) EPELS="$EPELS $f";; esac; done
+  # shellcheck disable=SC2086
+  rewrite_mirrors "$M" /etc/yum.repos.d/almalinux*.repo $EPELS /etc/yum.repos.d/docker-ce.repo
+  # EPEL Modular（EL8）上游已退役，镜像站多半没有：保留但允许不可用，避免 makecache 失败/卡住
+  for f in /etc/yum.repos.d/epel*modular*.repo; do [ -e "$f" ] && grep -q "^skip_if_unavailable" "$f" || { [ -e "$f" ] && sed -i '/^\[/a skip_if_unavailable=1' "$f"; }; done
   # epel-cisco-openh264 只有 metalink（codecs.fedoraproject.org，国内常不可达）、镜像站也没有：关掉，避免 dnf 报 Cannot find a valid baseurl
   [ -f epel-cisco-openh264.repo ] && sed -i 's/^enabled=1/enabled=0/' epel-cisco-openh264.repo
   cd - >/dev/null || true
   $PKG clean all >/dev/null; $PKG makecache 2>&1 | grep -iE "error|fail|Metadata cache" | head -5
-  bgrun dnfup-el$CUR "$PKG -y upgrade --nobest"
+  bgrun dnfup-el$CUR "$PKG -y upgrade --nobest" || echo "!! dnf upgrade 失败，见 $K/dnfup-el$CUR.log（升级本身已完成，但需要处理后再进入下一跳）"
   tail -3 $K/dnfup-el$CUR.log
   left=$(rpm -qa | grep -E "\.el${PREV}(_[0-9]+)?\." | grep -v gpg-pubkey)
   echo "== 残留 el$PREV 包: $(echo $left | wc -w)"; echo "$left" | head -30

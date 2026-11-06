@@ -23,7 +23,7 @@ bgrun() { # bgrun <name> <cmd>：systemd-run 后台执行，等待结束
   systemd-run --unit="osup-$1-$(date +%s)" /bin/bash -c "$2 > $log 2>&1; echo __RC=\$? >> $log" >/dev/null
   echo "后台任务 $1 已启动，日志 $log"
   until grep -q "^__RC=" "$log" 2>/dev/null; do sleep 15; t=$((t+15)); [ $((t % 180)) = 0 ] && echo "  ...${t}s $(grep -v '^\s*$' "$log" | tail -1 | cut -c1-110)"; done
-  grep "^__RC=" "$log"
+  local rc; rc=$(sed -n 's/^__RC=//p' "$log" | tail -1); echo "__RC=${rc:-?}"; return "${rc:-1}"   # 把后台命令的退出码传出去
 }
 
 case "$1" in
@@ -74,9 +74,12 @@ EOF
 
 update)
   echo "当前: $(cat /etc/redhat-release)"
-  bgrun dnfup-centos8 "dnf -y upgrade --exclude='docker*' --exclude='containerd*'"
-  grep -E "^(Error|Problem|  - )" "$K/dnfup-centos8.log" | head -15
-  echo "现在: $(cat /etc/redhat-release)" ;;
+  if ! bgrun dnfup-centos8 "dnf -y upgrade --exclude='docker*' --exclude='containerd*'"; then
+    grep -E "^(Error|Problem|  - )" "$K/dnfup-centos8.log" | head -15
+    echo "!! dnf upgrade 失败（见 $K/dnfup-centos8.log），不要继续 run：先解决依赖问题"; exit 1
+  fi
+  echo "现在: $(cat /etc/redhat-release)"
+  grep -qE "release 8\.[4-9]" /etc/redhat-release || { echo "!! 仍低于 8.4，almalinux-deploy 会拒绝转换"; exit 1; } ;;
 
 run)
   M=${2:?需要 MIRROR}; S=${3:-$K/almalinux-deploy.sh}
@@ -87,7 +90,7 @@ run)
   # 若 repo id 与 AlmaLinux 的 baseos/appstream 冲突，distro-sync 会同步回 CentOS，什么也没换（真实踩坑）
   mkdir -p /etc/yum.repos.d/disabled-for-upgrade; mv /etc/yum.repos.d/CentOS-Vault-8.repo /etc/yum.repos.d/disabled-for-upgrade/ 2>/dev/null
   opt="-d"; [ "$M" != upstream ] && opt="$opt -l=$M/almalinux"
-  bgrun almalinux-deploy "bash $S $opt"
+  bgrun almalinux-deploy "bash $S $opt" || echo "!! almalinux-deploy 返回非 0"
   grep -E "OK|ERROR|Error|error|reboot|Migration" "$K/almalinux-deploy.log" | tail -25
   grep -q "^__RC=0" "$K/almalinux-deploy.log" && echo "== 转换完成。用 hop.sh reboot 重启进入 AlmaLinux 内核，然后 convert-el8.sh post" ;;
 
@@ -103,7 +106,7 @@ post)
   nonalma=$(rpm -qa 'kernel*' --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH} %{VENDOR}\n' | grep -v AlmaLinux | awk '{print $1}' | grep -v "$(uname -r)")
   [ -n "$nonalma" ] && { echo "删除非 AlmaLinux 内核: $(echo $nonalma | wc -w) 个包"; dnf -y remove $nonalma 2>&1 | tail -1; }
   echo "== 非 AlmaLinux 厂商的包:"; rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}\t%{VENDOR}\n' | grep -viE "AlmaLinux|gpg-pubkey" | sort
-  bgrun dnfup-alma8 "dnf -y upgrade --nobest"; tail -2 "$K/dnfup-alma8.log"
+  bgrun dnfup-alma8 "dnf -y upgrade --nobest" || { tail -15 "$K/dnfup-alma8.log"; echo "!! dnf upgrade 失败"; exit 1; }; tail -2 "$K/dnfup-alma8.log"
   echo "下一步: hop.sh prep <MIRROR>（8→9）" ;;
 
 *) sed -n '2,13p' "$0";;
