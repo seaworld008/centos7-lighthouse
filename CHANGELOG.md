@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Changed
+- ci: actions/checkout v7、setup-python v7、setup-node v7、gitleaks-action v3（Node 24 运行时）
+
 ## [0.1.0] - 2026-11-06
 
 首个公开版本，提炼自一次真实生产迁移（华为云，CentOS 7.7 → AlmaLinux 10.2）。见 [field report](field-reports/2026-11-05-huawei-jumphost-docker-vpn.md)。
