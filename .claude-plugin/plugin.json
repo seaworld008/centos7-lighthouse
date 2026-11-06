@@ -1,0 +1,13 @@
+{
+  "name": "centos7-almalinux-upgrade",
+  "version": "0.1.0",
+  "description": "Safely upgrade CentOS 7 servers in place to AlmaLinux 10 (ELevate 7→8→9→10) while keeping workloads running: survey, baseline/verify, per-hop automation, recovery and fleet rollout for Alibaba Cloud / Huawei Cloud / AWS.",
+  "author": {
+    "name": "seaworld008",
+    "url": "https://github.com/seaworld008"
+  },
+  "homepage": "https://github.com/seaworld008/centos7-lighthouse",
+  "repository": "https://github.com/seaworld008/centos7-lighthouse",
+  "license": "MIT",
+  "keywords": ["centos7", "almalinux", "elevate", "leapp", "os-upgrade", "migration", "sysadmin", "devops"]
+}

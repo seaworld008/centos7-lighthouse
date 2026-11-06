@@ -1,0 +1,22 @@
+{
+  "name": "centos7-lighthouse",
+  "owner": {
+    "name": "seaworld008",
+    "url": "https://github.com/seaworld008"
+  },
+  "metadata": {
+    "description": "A lighthouse for CentOS 7 in the AI era: agent skills for upgrading CentOS 7 to AlmaLinux 10 safely.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "centos7-almalinux-upgrade",
+      "source": "./",
+      "description": "Upgrade CentOS 7 in place to AlmaLinux 10 (ELevate 7→8→9→10) without breaking workloads.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": ["centos7", "almalinux", "elevate", "leapp", "os-upgrade"],
+      "category": "devops"
+    }
+  ]
+}

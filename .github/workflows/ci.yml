@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & self-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Repo self-check (structure, versions, sensitive data)
+        run: python tools/check_repo.py
+      - name: Bash syntax
+        run: for f in skills/*/scripts/*.sh tests/*.sh; do bash -n "$f" && echo "ok $f"; done
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -S warning -e SC2010 -s bash skills/*/scripts/*.sh tests/*.sh
+      - name: Python compile
+        run: python -m py_compile skills/*/scripts/*.py tools/*.py
+
+  plugin:
+    name: Claude Code plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Validate plugin
+        run: claude plugin validate .
+      - name: Validate marketplace
+        run: claude plugin validate .claude-plugin/marketplace.json
+
+  smoke:
+    name: Smoke test on ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["centos:7", "almalinux:8", "almalinux:9", "almalinux:10"]
+    steps:
+      - uses: actions/checkout@v4
+      # actions/checkout 不能在 centos:7 容器内运行（glibc 太旧），所以从宿主机 docker run
+      - name: Run toolkit inside ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/repo:ro" "${{ matrix.image }}" bash /repo/tests/container-smoke.sh --inside
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

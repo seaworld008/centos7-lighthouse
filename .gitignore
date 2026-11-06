@@ -1,0 +1,27 @@
+# 本地私有文件：实际服务器的配置、临时脚本
+_private/
+
+# 资产表 / 凭据（含密码，绝不能提交）
+*.xlsx
+*.xls
+*.xlsm
+servers*.csv
+inventory*.csv
+*.pem
+*.key
+id_rsa*
+.env
+
+# 批量升级时每台服务器的勘察结果、报告（含内网 IP、业务信息）
+fleet/
+
+# 例外：技能自带的示例跟踪表
+!skills/centos7-almalinux-upgrade/assets/fleet-tracker.csv
+
+# Python / 编辑器 / 系统
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

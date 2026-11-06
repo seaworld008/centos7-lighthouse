@@ -1,0 +1,108 @@
+# 应用兼容处理（EL7 → EL10）
+
+## 目录
+- nginx（自编译 → 官方包）
+- Docker / compose / cgroup v2
+- Java
+- Python
+- PHP
+- 宿主机数据库
+- postfix
+- 网络（ifcfg → NetworkManager keyfile）
+- SSH
+- kubectl / helm / kubeconfig
+- SysV init 与 rc.local
+- TLS / 加密策略
+- 其它
+
+---
+
+## nginx（自编译 → 官方包）
+
+1. **过渡**：EL7 上用 `nginx-static-build.sh <nginx路径> --install` 同版本静态重编，三跳期间都能跑。
+2. **最终**：`finalize.sh nginx-repo` 装 nginx.org stable，然后迁移配置：
+   - 主配置写 `/etc/nginx/nginx.conf`，站点拆到 `/etc/nginx/conf.d/<域名>.conf`，证书放 `/etc/nginx/ssl/`（key 600）
+   - 旧配置里的相对路径（`root html/xxx`、`cert/xxx`）全部改绝对路径；**网站目录可以不动**（先 grep 备份/清理脚本是否引用旧路径）
+   - `ssl on;` 已在 1.25.1 删除 → `listen 443 ssl;`
+   - 公共 TLS 参数提到 http 块：`ssl_protocols TLSv1.2 TLSv1.3;`（EL9+ 默认加密策略本来就禁 TLS1.0/1.1；若有老客户端要连，先问用户）
+   - **`add_header` 继承规则**：server/location 里一旦写了 add_header，上层的全部不继承。原样保留原结构，行为才一致。
+   - 旧配置里第一个 443 server 是隐式默认站点；下线它时加一个显式 `default_server` 返回和以前一致的结果（避免 ELB 健康检查/未知域名行为变化）。80 端口同理。
+   - 去掉已下线组件的 location（如 fastcgi_pass 到已删 php-fpm）
+   - 日志改到 /var/log/nginx（包自带 logrotate）
+3. 切换：`nginx -t` 通过后停旧进程 → 删掉旧的自定义 unit / rc.local 行 → `systemctl enable --now nginx`；逐个域名用 `curl -sk --resolve 域名:443:127.0.0.1` 对比基线；`openssl s_client -tls1_1/-tls1_2/-tls1_3` 验证协议。
+
+## Docker / compose / cgroup v2
+
+- leapp 通过 vendors.d/docker-ce 把 docker-ce 一路升上去（19.03 → 26 → 29），数据目录和容器保留。前提：docker-ce 厂商源镜像可达且关掉 nightly/test。
+- **重启前**：只停 `restart=always` 的有状态容器；`unless-stopped`/`no` 的不手动停（交给 docker.service 关机时优雅停止）。用 `hop.sh reboot`。
+- **已经误停了**：离线（initramfs 或救援）编辑 `/var/lib/docker/containers/*/config.v2.json`，把 `"HasBeenManuallyStopped":true` 改 false，开机即自启（实测有效）。
+- **docker-compose v1**：Docker ≥25 下 `KeyError: 'ContainerConfig'`，且会把旧容器改名为 `<id>_<name>`。用 `docker compose`；`finalize.sh compose-wrapper`。`version:` 字段告警可忽略。
+- **cgroup v2**（EL9 默认，EL10 只有 v2）：
+  - 读取 `/sys/fs/cgroup/memory/memory.limit_in_bytes` 的老程序会崩（实测 Yearning 3.0.9 / TiDB parser 的 `FATAL ... no such file`）。
+  - 兼容 shim：在 compose 里给该服务挂 `./cgroupv1-shim:/sys/fs/cgroup:ro`，shim 目录里放 `memory/memory.limit_in_bytes`（9223372036854771712）和 `memory/memory.usage_in_bytes`（0）。`finalize.sh cgroupv1-shim <目录>` 生成文件。长期方案是升级应用版本。
+  - JDK 8u372 之前的容器不识别 cgroup v2 内存限制（会按宿主机内存算堆大小）；显式写了 -Xmx 的不受影响。
+- Docker 19.03 不支持 cgroup v2；必须随 leapp 升级到新版。
+
+## Java
+
+- EL10 只提供 Java 21/25；宿主机上 Java 8/11/17 会被 leapp 删除。容器里的 JDK 不受影响。
+- 宿主机直接跑 jar 的：改用容器，或自带 JDK（如 Temurin 8/17 tar 包放 /opt），在 unit 里写绝对路径。
+
+## Python
+
+- EL9 起无 python2；pip 装到系统 site-packages 的包是升级失败头号元凶（每跳前 pipfix）。
+- 业务 Python 脚本：EL8=3.6，EL9=3.9，EL10=3.12。建议用 venv 或容器，不要往系统 site-packages 装东西。
+
+## PHP
+
+- webtatic（php72w 等）在 EL8+ 不存在。先问用户是否还用。
+- 要用：remi 仓库（各版本按需），或 `php:<ver>-fpm` 容器监听 127.0.0.1:9000，把站点目录挂进去（扩展按 `php -m` 清单装）。
+- 不用：卸载前列出依赖它的 nginx server（`fastcgi_pass`），告诉用户哪些站点会下线。
+
+## 宿主机数据库
+
+- rpm 版 mariadb/postgresql 每跳都会大版本升级：MariaDB 5.5→10.3→10.5→10.11 每跳后跑 `mysql_upgrade`/`mariadb-upgrade`；PostgreSQL 9.2→10→13→16 每跳都要 `pg_upgrade`（或最稳：升级前 `pg_dumpall`，升级后新建实例导入）。
+- 数据量大/关键库：建议迁出到云数据库或新机器，不要原地连跳。
+- 容器里的数据库不受影响，重启前优雅停止即可。
+
+## postfix
+
+- EL10 无 libdb：`hash:`/`btree:` 表改 `lmdb:`，`newaliases`、`postmap` 重建。`finalize.sh postfix-lmdb`，最后用 `echo test | sendmail root` 看日志 `status=sent`。
+
+## 网络（ifcfg → NetworkManager keyfile）
+
+- 9→10 阻断项。`cp -a /etc/sysconfig/network-scripts <备份>` → `nmcli connection migrate` → `nmcli -f NAME,DEVICE,FILENAME c show` 确认 → `ip -br a; ip r` 不变。
+- 云主机镜像常带 eth1~eth4 的 ifcfg（热插拔网卡用），一起迁移无害。
+- Docker 的网桥连接在 /run 下，迁移不影响。
+- `dhcp=dhclient` 的 NM 配置在 EL10 上必须去掉（EL10 无 dhclient）。
+
+## SSH
+
+- 自编译 openssh 先换回官方（swap-openssh.sh）。
+- 显式写 `PermitRootLogin`（EL9 默认 prohibit-password）。
+- EL9+ 默认加密策略禁用 SHA1 签名：很老的客户端（只支持 ssh-rsa SHA1）会连不上；DSA 密钥不再支持。
+- `ClientAliveCountMax 0`：OpenSSH ≥ 8.2 表示禁用断线检测，<8.2 表示空闲即断。
+
+## kubectl / helm / kubeconfig
+
+- kubectl 与集群版本差不超过 ±1 minor。`finalize.sh kubectl auto` 读取集群版本并装对应 pkgs.k8s.io 源（国内走阿里云 kubernetes-new 镜像）。
+- `~/.kube/config` 不动即可；`.bashrc` 里的 `source <(kubectl completion bash)` 需要 bash-completion 包。
+- helm：`finalize.sh helm`（最新 v3，校验 sha256）。v4 有破坏性变化，未与用户确认不要升。
+- 用户说"kubeconf 命令"，通常就是 kubectl + kubeconfig；先 grep 有没有同名 alias/脚本。
+
+## SysV init 与 rc.local
+
+- AlmaLinux 10.2 仍有 sysv-generator，SysV 脚本能启动；`finalize.sh sysv-units` 可生成原生 unit 备用。
+- rc.local 里启动的业务（nginx、php-fpm、java…）改写为 systemd unit（Type、PIDFile、ExecStartPre 测试配置），`enable`，rc.local 里注释掉。
+- 自编译 openssh 留下的 `/etc/rc.d/rc*.d/S55sshd` 链接要删。
+
+## TLS / 加密策略
+
+- EL9+：`DEFAULT` 策略禁 TLS1.0/1.1、SHA1 签名、<2048 位 RSA。影响两个方向：老客户端连本机；本机程序（curl、Java、python）连老服务器/老 MySQL。
+- 临时兼容：`update-crypto-policies --set DEFAULT:SHA1` 或 `LEGACY`（需用户同意，记录在报告里，之后推动对端升级）。
+
+## 其它
+
+- ntpd → chronyd：leapp 自动迁移配置。
+- denyhosts（py2）等老工具：EL9+ 失效，换 fail2ban。
+- 云厂商 agent：见 cloud-providers.md。

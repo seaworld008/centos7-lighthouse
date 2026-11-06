@@ -1,0 +1,122 @@
+# 避坑手册（现象 → 原因 → 处理）
+
+带 ★ 的是真实迁移中实际踩到的。
+
+## 目录
+1. 通用：远程操作
+2. EL7 准备阶段
+3. 7 → 8
+4. 8 → 9
+5. 9 → 10
+6. 每跳重启后
+7. 升级后应用层
+
+---
+
+## 1. 通用：远程操作
+
+**★ SSH 会话 5 分钟左右被断，长命令执行到一半没了**
+- 原因：sshd_config 里 `ClientAliveInterval 300` + `ClientAliveCountMax 0`，在 OpenSSH < 8.2 上表示"空闲就断"。换回 7.4/8.0 官方 openssh 后行为出现。
+- 处理：客户端开 keepalive（remote.py 已开）；leapp/dnf 这种长任务用 `systemd-run` 后台跑并写日志，再轮询（hop.sh 已这样做）。
+
+**★ `pkill -f "xxx"` 把自己的会话杀了，返回 exit -1**
+- 原因：`pkill -f` 匹配完整命令行，你远程执行的 `bash -c "...pkill -f 'leapp preupgrade'...; nohup leapp preupgrade"` 里本身就包含这个字符串。
+- 处理：按 PID 杀；或用 `pgrep -f "[l]eapp preupgrade"` 这种写法（正则不匹配自身字面量，但注意同一命令行里别再出现未加括号的原文）；或把命令写进脚本文件执行。
+
+**★ Windows Git Bash 下传 `/root/xxx` 参数变成 `C:/Program Files/Git/root/xxx`**
+- 原因：MSYS 路径转换。
+- 处理：remote.py 已自动还原；其它工具可设 `MSYS_NO_PATHCONV=1`。
+
+**★ 远程执行 `yum check` 等极慢命令导致本地工具超时**
+- 处理：不需要的检查别跑；需要的放后台。
+
+## 2. EL7 准备阶段
+
+**CentOS 7 官方源已下线 / repo 文件重复定义（"Repository base is listed more than once"）**
+- 处理：`prep-el7.sh repos <MIRROR>` 统一成 centos-vault 7.9.2009 一个文件；不可达的第三方源自动禁用（否则 yum/leapp 卡住）。
+
+**★ `yum update` 时某个 python 包 "Failed"：`cpio: rename` / `unpacking of archive failed`**
+- 原因：以前有人 `pip install` 到了系统 site-packages（例：pip 装的 urllib3 目录占了 rpm 要放的位置）。
+- 处理：`prep-el7.sh pipfix`：挪走所有不属于 rpm 的 site-packages 文件（备份可还原），重装被覆盖的 python rpm，补装失败的包。**每一跳前都要再查一次**（hop.sh prep 会做）。
+
+**★ openssh 是自编译 rpm（如 9.8p1，vendor 为空，SysV 启动脚本）**
+- 风险：leapp 不升级非官方包；它链接的 EL7 库/SysV 脚本到新系统上失效 → sshd 起不来 → 失联。
+- 处理：`swap-openssh.sh`：用官方 sshd 先 `-t` 测现有配置，备份旧二进制，systemd-run 脱离会话替换，端口没起来就用旧 sshd 兜底。替换后立即用新连接验证。
+- 注意：9.x 自编译版的会话进程是 `/usr/libexec/openssh/sshd-session`，换包后旧监听进程再 fork 新会话会失败，所以换完必须立刻重启 sshd（脚本已处理）。
+
+**★ 卸载 `mysql-community-libs-compat` 会连带删掉 postfix**
+- 原因：它替换了 `mariadb-libs` 提供的 libmysqlclient.so.18，postfix 依赖它。
+- 处理：`yum swap -- remove mysql-community-* -- install mariadb-libs`（`prep-el7.sh inhibitors` 已做）；宿主机若装了 mysql-community-server 则不要自动处理。
+
+## 3. 7 → 8
+
+| 阻断项 / 报错 | 处理 |
+|---|---|
+| ★ `Leapp detected loaded kernel drivers which have been removed in RHEL 8`（floppy、pata_acpi） | `rmmod` + `/etc/modprobe.d` 黑名单（prep-el7.sh inhibitors） |
+| ★ `Multiple devel kernels installed` | 只保留当前内核的 kernel-devel |
+| ★ `Missing required answers`：`remove_pam_pkcs11_module_check.confirm` | `leapp answer --section remove_pam_pkcs11_module_check.confirm=True`（hop.sh answer） |
+| ★ `Detected customized configuration for dynamic linker`（mysql-x86_64.conf） | 随 mysql-community-libs 一起换掉即消失 |
+| ★ `dnf_transaction_check` 失败：`Failed to download metadata for repo 'el8-docker-ce-nightly'` | vendors.d/docker-ce.repo 改国内镜像并关掉 test/nightly 段（hop.sh prep） |
+| ★ preupgrade 卡在 dnf_transaction_check 几十分钟 | EPEL 走 metalink 国外镜像，改国内 baseurl（hop.sh prep） |
+| `Packages not signed by Red Hat`（hostguard、kubectl、自编译包…） | 不是阻断；但升级后这些包保持 EL7 版本，逐个确认还能用 |
+| `Difference in Python versions` / `GRUB2 core will be updated` | 提示，无需处理 |
+| /var 空间不足 | leapp 需要约 3~5GB；清 docker 无用镜像（先确认）、日志、yum 缓存 |
+
+**★ 最严重：升级重启后进 initramfs 紧急模式，`upgrade.service failed`，日志 `dnf_upgrade_transaction ... python2-pyyaml install failed: cpio: File from package already exists as a directory`**
+- 原因：pip 装的 PyYAML（`/usr/lib64/python2.7/site-packages/yaml`、`PyYAML-3.12-py2.7.egg-info`）和 rpm 冲突。只有这一个包失败，但 DNF 返回非 0 → leapp 后续阶段（清理、post 动作）全部没跑。系统其实已经大部分是 EL8 了。
+- 处理：见 `recovery.md` 的"半升级"流程。预防：每跳前 pipfix。
+
+## 4. 8 → 9
+
+| 阻断项 / 报错 | 处理 |
+|---|---|
+| ★ `Cannot perform the VDO check of block devices` | `dnf install vdo`（让检查能跑），确认无 VDO 设备后 `leapp answer --section check_vdo.confirm=True`（hop.sh answer 自动） |
+| ★ 安装 el8 的 leapp 时 `filtered out by exclude filtering` | 上一跳 leapp 在 /etc/dnf/dnf.conf、/etc/yum.conf 留了 `exclude=...leapp...`，删掉（hop.sh 已处理） |
+| ★ 旧 el7 leapp 包残留导致 el8 leapp 装不上 | `rpm -e --nodeps` 删旧 leapp 包 + 删 /etc/leapp/files（hop.sh prep/post 已处理） |
+| `Remote root logins globally allowed using password` | 若 sshd_config 显式写了 `PermitRootLogin yes` 则只是提示；**没写的话 EL9 默认 prohibit-password，root 密码登录会失联**，先显式写上 |
+| python2 | EL9 没有 python2。确认无人依赖后移除（hop.sh prep 会检查依赖）；有依赖的脚本先改 python3 |
+| ★ 宿主机 docker 容器正常但 Yearning 无限重启：`open /sys/fs/cgroup/memory/memory.limit_in_bytes: no such file` | EL9 起默认 cgroup v2。见 app-compat.md "cgroup v2" |
+
+## 5. 9 → 10
+
+| 阻断项 / 报错 | 处理 |
+|---|---|
+| ★ `Legacy network configuration found`（每个 ifcfg 一条） | 先备份 network-scripts，`nmcli connection migrate`（不重连，地址/路由不变），确认 eth0 的 FILENAME 变成 .nmconnection |
+| ★ `Berkeley DB (libdb) has been detected` | EL10 没有 libdb。postfix 的 `hash:` 表升级后改 `lmdb:`（finalize.sh postfix-lmdb）；其它用 libdb 的程序要换 |
+| ★ `kernel drivers which are no longer maintained`（nft_compat、ip_set） | 提示；fail2ban/docker 仍可用，升级后验证 |
+| CPU 不满足 x86-64-v3 | AlmaLinux 10 标准版无法启动！survey 会报 BLOCKER；用 x86_64_v2 变体或停在 9 |
+| ★ 事务里会删掉 java-1.8.0/11/17-openjdk、redis、dhcp-client 等 | 用 `hop.sh report` 看"将被删除的包"：宿主机直接跑 Java 8/11/17 程序的要改用容器或自带 JDK；NetworkManager 配了 `dhcp=dhclient` 的要先改回 internal |
+
+## 6. 每跳重启后
+
+**★ 旧 repo 文件仍指向 EL7/EPEL7，`dnf distro-sync` 报一堆 "nothing provides … from epel"**
+- 原因：用户改过的 repo 文件不会被覆盖，新版本放在 `*.rpmnew`；旧文件以 `*.rpmsave` 留下。
+- 处理：`hop.sh post`：rpmnew 替换、rpmsave 挪走、硬编码旧版本号的源挪走、镜像改写。
+
+**★ `dnf distro-sync` 报模块包冲突（javapackages、eclipse/maven 模块）**
+- 处理：用 `dnf -y upgrade --nobest` 即可，不必强求 distro-sync。
+
+**★ 旧内核、leapp 包、/var/lib/leapp（3GB+）残留**
+- 处理：`hop.sh post` 统一清理，并删失效的 BLS 启动项。
+
+**★ cloud-init 服务 failed（203/EXEC）**
+- 原因：EL7 上是 pip/egg 装的 py2 cloud-init。
+- 处理：长期运行的机器上 cloud-init 作用有限，可 `touch /etc/cloud/cloud-init.disabled`；AWS 等依赖它的环境改装新系统 cloud-init 包（见 cloud-providers.md）。
+
+**云厂商 SysV 插件**（华为 hostguard/ICAgent/CloudResetPwd…）：AlmaLinux 10.2 仍保留 systemd-sysv-generator，实测能正常启动；为防以后去掉，可 `finalize.sh sysv-units` 包成原生 unit。升级前就坏的插件（如 cloudResetPwdAgent）在报告里注明"非本次引起"。
+
+## 7. 升级后应用层
+
+**★ 自编译 nginx：`libssl.so.10: cannot open shared object file`**
+- 处理：过渡期 `nginx-static-build.sh`（同版本静态 OpenSSL/PCRE，实测 EL8 上编译后在 EL9、EL10 都能跑）；最终换 nginx.org 官方包。
+
+**★ `docker-compose up -d` 报 `KeyError: 'ContainerConfig'`，而且旧容器已被改名为 `<短id>_<名字>`**
+- 原因：docker-compose v1.29 与 Docker ≥ 25 不兼容，失败前已经重命名了旧容器。
+- 处理：`docker compose`（v2）重建；先 `docker rm` 那个改名后的残留容器（确认它没有数据卷！）；`finalize.sh compose-wrapper` 让 `docker-compose` 命令转发到 v2。
+
+**★ 删掉"没用"的 PHP 后某站点从 200 变 404**
+- 教训：组件和站点的对应关系要在删之前告诉用户（nginx -T 里哪些 server 用 fastcgi_pass）。由用户决定站点去留。
+
+**`pkill`/`docker stop` 后 VPN 断开、无法登录**：见 recovery.md "失联"。
+
+**★ 证书即将过期**：迁移 nginx 时顺手 `openssl x509 -noout -enddate` 检查，写进报告。

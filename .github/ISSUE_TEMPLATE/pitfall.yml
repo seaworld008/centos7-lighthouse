@@ -1,0 +1,54 @@
+name: "🕳️ 新坑 / New pitfall"
+description: 升级中遇到了 pitfalls.md 没覆盖的问题 / A problem not yet covered by references/pitfalls.md
+title: "pitfall: "
+labels: [pitfall]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先搜一下 `references/pitfalls.md`、`recovery.md` 和 `field-reports/`。**请务必脱敏**：不要贴真实 IP、域名、主机名、账号、密码。
+        Search pitfalls.md / recovery.md / field-reports first. **Sanitize**: no real IPs, domains, hostnames, credentials.
+  - type: dropdown
+    id: phase
+    attributes:
+      label: 阶段 / Phase
+      options: [survey/backup, EL7 prep, "7 → 8", "8 → 9", "9 → 10", finalize (EL10), after reboot, other]
+    validations: { required: true }
+  - type: dropdown
+    id: cloud
+    attributes:
+      label: 云 / Cloud
+      options: [aliyun, huawei, aws, other / on-prem]
+    validations: { required: true }
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象（原始报错）/ Symptom (raw error output)
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: cause
+    attributes:
+      label: 原因 / Root cause
+  - type: textarea
+    id: fix
+    attributes:
+      label: 处理 / Fix that worked
+    validations: { required: true }
+  - type: textarea
+    id: prevention
+    attributes:
+      label: 如何预防或自动检测 / How survey.sh or the scripts could prevent/detect it
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: 可信度 / Confidence
+      options: [reproduced on multiple servers, seen once, suspected]
+    validations: { required: true }
+  - type: checkboxes
+    id: sanitized
+    attributes:
+      label: 确认 / Confirm
+      options:
+        - label: 我已脱敏（无真实 IP/域名/主机名/凭据）/ I removed all real IPs, domains, hostnames and credentials
+          required: true

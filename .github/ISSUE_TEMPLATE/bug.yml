@@ -1,0 +1,33 @@
+name: "🐛 脚本缺陷 / Script bug"
+description: 某个脚本行为不对 / A script in the toolkit misbehaves
+title: "bug(<script>): "
+labels: [bug, area:scripts]
+body:
+  - type: dropdown
+    id: script
+    attributes:
+      label: 脚本 / Script
+      options: [remote.py, survey.sh, backup.sh, state.sh, verify.sh, prep-el7.sh, swap-openssh.sh, hop.sh, nginx-static-build.sh, finalize.sh, tools/check_repo.py, tests/container-smoke.sh]
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes:
+      label: 目标机系统 / Target OS
+      placeholder: "cat /etc/redhat-release"
+    validations: { required: true }
+  - type: textarea
+    id: cmd
+    attributes:
+      label: 执行的命令 / Command
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: output
+    attributes:
+      label: 实际输出（脱敏）/ Actual output (sanitized)
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望 / Expected

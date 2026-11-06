@@ -1,0 +1,3 @@
+name,host,cloud,region,owner,business,class,blockers,decisions_confirmed,snapshot_done,window,stage,el8_done,el9_done,el10_done,final_reboot_ok,report,notes
+web-01,10.0.0.11,aliyun,cn-hangzhou,alice,nginx + docker apps,B,"pip pkgs in system site-packages; docker-compose v1",yes,yes,2026-01-10 22:00,done,2026-01-10,2026-01-10,2026-01-10,yes,fleet/web-01/report.md,example row - replace with your servers
+jump-01,10.0.0.12,huawei,cn-north-4,bob,jump host + VPN router container,B+VPN,"VPN runs on this host; custom openssh 9.x; self-built nginx",yes (PHP site dropped),yes,,survey,,,,,,do last; keep VNC console open
