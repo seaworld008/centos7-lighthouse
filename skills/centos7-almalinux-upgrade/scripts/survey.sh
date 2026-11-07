@@ -44,7 +44,17 @@ VARFREE=$(df -Pm /var | awk 'NR==2{print $4}'); BOOTFREE=$(df -Pm /boot | awk 'N
 grep -qE '^[^#]\S*\s+/(sys|proc|dev|run)/\S*\s+\S+\s+\S*bind' /etc/fstab && flag BLOCKER "fstab 里有 bind 到 /sys|/proc|/dev|/run 的挂载（如阿里云 set_ecs_special.sh 的 eth0-speed.mock）：leapp 升级环境里挂不上直接进 emergency（shell 在串口，VNC 敲不了）。hop.sh up 会在 leapp upgrade 前自动注释，EL10 后恢复"
 d=$(rpm -qa --qf '%{NAME}.%{ARCH}\n' 2>/dev/null | grep -vE '^(gpg-pubkey|kernel|kernel-devel|kernel-core|kernel-modules)\.' | sort | uniq -d | tr '\n' ' ')
 [ -n "$d" ] && flag HIGH "rpm 库里有重复包（以前的 yum 事务没做完）：$d→ yum update 会报 multilib/保护版本错误。先 package-cleanup --cleandupes；删不掉的旧副本 rpm -e --justdb --nodeps，再 update 并 reinstall 这些包"
-mp=$(for p in $(ps -eo pid=); do grep -q "session-[0-9]*\.scope" /proc/$p/cgroup 2>/dev/null || continue; grep -qE "docker|kubepods" /proc/$p/cgroup 2>/dev/null && continue; case "$(cat /proc/$p/comm 2>/dev/null)" in bash|sh|sshd|sudo|su|sleep|tail|ps|grep|top|screen|tmux*) continue;; esac; ss -lntp 2>/dev/null | grep -q "pid=$p," && cat /proc/$p/comm; done | sort | uniq -c | tr '\n' ' ')
+# 注意：bash 4.2（EL7）里 $( ) 内不能写 case 的 "pattern)"（括号不配对会解析失败），所以放进函数
+manual_listeners() {
+  local p
+  for p in $(ps -eo pid=); do
+    grep -q "session-[0-9]*\.scope" /proc/$p/cgroup 2>/dev/null || continue
+    grep -qE "docker|kubepods" /proc/$p/cgroup 2>/dev/null && continue
+    case "$(cat /proc/$p/comm 2>/dev/null)" in bash|sh|sshd|sudo|su|sleep|tail|ps|grep|top|screen|tmux*) continue;; esac
+    ss -lntp 2>/dev/null | grep -q "pid=$p," && cat /proc/$p/comm
+  done
+}
+mp=$(manual_listeners | sort | uniq -c | tr '\n' ' ')
 [ -n "$mp" ] && flag HIGH "有手工从 SSH 会话启动、正在监听端口的服务进程（$mp）：重启后不会自己起来。backup.sh 会记录命令行/目录/环境变量，升级后 finalize.sh manual-procs 生成 systemd 服务"
 grep -qE "\s(nfs|cifs|glusterfs)\s" /etc/fstab && flag MEDIUM "fstab 有网络文件系统：升级环境里可能挂载失败，升级前临时注释 noauto/nofail"
 lsblk -o FSTYPE 2>/dev/null | grep -qi vdo && flag HIGH "存在 VDO 设备：8→9 前需转换为 LVM-VDO"
