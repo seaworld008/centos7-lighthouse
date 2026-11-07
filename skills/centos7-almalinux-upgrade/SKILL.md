@@ -13,7 +13,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 ## 什么时候不要原地升级
 
 先看 `survey.sh` 的 BLOCKER。以下情况建议**新建 AlmaLinux 10 机器迁移业务**，而不是原地升级：
-- 是 Kubernetes 节点（kubelet 在跑）——drain 后换新节点更干净
+- 是 Kubernetes 节点（kubelet 在跑）——要当成**集群级变更**来做，按 `references/kubernetes.md`（已实测 kubeadm 1.21 + dockershim + flannel/ipvs 在 EL10 上可用，3m3w 集群约 6 小时）；也可以 drain 后换新节点
 - 宿主机 rpm 装的数据库要跨多个大版本（MariaDB 5.5→10.11、PostgreSQL 9.2→16）且数据量大
 - 非 x86_64、btrfs、系统盘极小且无法扩容
 - CPU 不支持 x86-64-v3（AlmaLinux 10 标准版跑不了；可以只升到 9，或用 AlmaLinux 10 的 x86_64_v2 变体）
@@ -37,7 +37,8 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post` |
 | `nginx-static-build.sh` | 自编译 nginx 同版本静态重编（过渡期一路可用） |
 | `fleet_summary.py` | 本机运行：汇总多台 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批） |
-| `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装 |
+| `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务 |
+| `k8s.sh` | K8s 节点：`backup`（etcd 快照/配置/二进制/pod 列表，自动 `pin` 版本）、`stop`、`nfs-off`/`nfs-on`、`nm`、`fix`、`check`、`pods`（与升级前对比）、`jvm-maxram`（cgroup v2 下老 JDK 的 OOM） |
 
 本机在 Windows Git Bash 下调用时，`remote.py` 已自动处理 MSYS 把 `/root/...` 改写成 `C:/Program Files/Git/root/...` 的问题。
 
@@ -144,3 +145,4 @@ bash verify.sh <BACKUP_DIR>   # FAIL 必须处理；WARN 判断是否预期
 - `references/cloud-providers.md` — 阿里云/华为云/AWS 差异：快照、带外控制台前置条件、镜像源、云厂商 agent、cloud-init。
 - `references/recovery.md` — 卡在 initramfs 紧急模式、开机失联、半升级状态时怎么救（含 VNC 操作技巧）。
 - `references/fleet.md` — 几十上百台批量推进：资产表、并行勘察、分类、金丝雀、分批、记录。
+- `references/kubernetes.md` — K8s 节点原地升级：开工前必须弄清的事（访问路径/控制面入口/etcd/存储）、兼容性结论、推荐顺序、踩过的坑、恢复检查清单。

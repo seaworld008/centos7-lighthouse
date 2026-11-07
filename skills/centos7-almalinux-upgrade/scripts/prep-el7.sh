@@ -2,7 +2,7 @@
 # prep-el7.sh - CentOS 7 上的升级前准备（分步执行，每步看结果再下一步）
 #
 #   bash prep-el7.sh repos   <MIRROR>   # 统一 CentOS7/EPEL7/docker 源到可用镜像（CentOS 7 已 EOL，官方源已下线）
-#   bash prep-el7.sh update             # 后台 yum update 到 7.9（排除 docker/containerd/openssh），等待完成
+#   bash prep-el7.sh update             # 后台 yum update 到 7.9（排除 docker/containerd/openssh/kube*），等待完成
 #   bash prep-el7.sh pipfix             # 挪走 pip 装的、不属于 rpm 的 site-packages，并修复被覆盖的 python rpm
 #   bash prep-el7.sh inhibitors         # 处理已知 7→8 阻断项（驱动/kernel-devel/旧内核/mysql-libs/pam_pkcs11）
 #   bash prep-el7.sh netmgr [MIRROR]    # 还在用 network.service 时切到 NetworkManager（带自动回滚）
@@ -83,7 +83,8 @@ EOF
 
 update)
   echo "当前: $(cat /etc/redhat-release)"
-  bgrun yum7update "yum -y update --exclude='docker*' --exclude='containerd*' --exclude='openssh*'" || echo "!! yum update 返回非 0（个别包失败时也会这样，看下面的 Failed 段）"
+  # K8s 组件必须保持原版本（kubelet/kubeadm 跨 minor 会把节点搞坏），docker/containerd 交给 leapp 厂商源
+  bgrun yum7update "yum -y update --exclude='docker*' --exclude='containerd*' --exclude='openssh*' --exclude='kube*' --exclude='cri-tools'" || echo "!! yum update 返回非 0（个别包失败时也会这样，看下面的 Failed 段）"
   grep -E "^(Failed|Error|error:)" -A3 /root/os-upgrade-kit/yum7update.log | head -20
   echo "现在: $(cat /etc/redhat-release)；有 Failed 的包通常是 pip 文件冲突 → 运行 pipfix 后重装该包"
   ;;
@@ -109,7 +110,8 @@ inhibitors)
   for m in floppy pata_acpi; do lsmod | grep -q "^$m " && rmmod "$m" && echo "rmmod $m"; done
   printf 'blacklist floppy\nblacklist pata_acpi\n' > /etc/modprobe.d/leapp-removed-drivers.conf; cat /etc/modprobe.d/leapp-removed-drivers.conf
   echo "--- 2. 多余 kernel-devel / 旧内核"
-  cur=$(uname -r); extra=$(rpm -q kernel-devel 2>/dev/null | grep -v "not installed" | grep -v "${cur%.x86_64}")
+  # 保留"最新已安装内核"对应的 kernel-devel（不是正在运行的：update 后会重启进最新内核，按运行内核保留会留下两个 → leapp 阻断，真实踩坑）
+  cur=$(rpm -q kernel --qf '%{VERSION}-%{RELEASE}\n' | sort -V | tail -1); extra=$(rpm -q kernel-devel 2>/dev/null | grep -v "not installed" | grep -v "$cur")
   [ -n "$extra" ] && yum -y remove $extra 2>&1 | tail -1
   rpm -q yum-utils >/dev/null || yum -y install yum-utils >/dev/null 2>&1
   package-cleanup -y --oldkernels --count=1 2>&1 | tail -1; rpm -q kernel kernel-devel

@@ -54,6 +54,19 @@
 
 **★ yum update 装了新内核，但运行的还是旧内核** → leapp 要求当前运行的是最新内核，所以 7→8 之前要先在 EL7 上重启一次（可以和上面的 NM 验证一起做）。
 
+**★ `yum update` 报 `Multilib version problems` / `Protected multilib versions: glibc-...i686 != glibc-...x86_64`，但根本没装 i686 包**
+- 原因：rpm 库里有**重复包**（同名两个版本：glibc-common、nss-softokn-freebl、tzdata、grub2-*…），以前某次 yum 事务中断了（这台机器运行了 1700 多天）。
+- 处理：`package-cleanup --dupes` 查看；`package-cleanup -y --cleandupes` 删旧副本；被其它包依赖而删不掉的，用 `rpm -e --justdb --nodeps <旧副本>` 只从库里去掉（先备份 /var/lib/rpm），再 `prep-el7.sh update`，最后 `yum reinstall` 这些包保证文件一致。`survey.sh` 报 HIGH。
+
+**★ 7→8 阻断 `Multiple devel kernels installed`（明明 inhibitors 删过）**
+- 原因：`inhibitors` 按"正在运行的内核"保留 kernel-devel，之后 update 又装了新内核的 kernel-devel。
+- 处理：已改为保留"最新已安装内核"对应的 kernel-devel。
+
+**★ 手工启动的宿主机程序（`nohup java -jar ... &`）重启后不会起来**
+- 现象：进程挂在 SSH 的 `session-N.scope` 下，没有 systemd 服务、没有 rc.local/cron @reboot。升级要重启 3~4 次。
+- 处理：`backup.sh` 记录这类正在监听端口的进程的 cmdline/cwd/exe/环境变量（`<BACKUP>/manual-procs/`）；EL10 后 `finalize.sh manual-procs <dir>` 生成 systemd 服务，`systemctl enable --now`。`survey.sh` 报 HIGH。环境变量里 `LANG=zh_CN.GB18030` 之类在 EL10 需要 `glibc-langpack-zh`。
+- 例外：银行前置机/证书客户端（如某银行 B2C 外联平台）启动时要输入或校验证书密码，升级后可能报"证书密码错误"，这类交给业务方处理，不要尝试。
+
 **★ Harbor 机器重启后，core/registry/nginx 等容器全部 exited：`failed to initialize logging driver: dial tcp 127.0.0.1:1514: connection refused`**
 - 原因：Harbor 的容器都用 syslog 日志驱动，发到 harbor-log 容器（1514 端口）。开机时它们比 harbor-log 先启动，Docker **不会重试**这种失败。这与升级无关，任何一次重启都会发生，但升级要重启好几次。
 - 处理：加一个 `harbor-autostart.service`：等 1514 端口可用后，`docker start` 该 compose 项目里已经退出的容器（见 app-compat.md 的 Harbor 一节）。
@@ -128,6 +141,8 @@
 | ★ 旧 el7 leapp 包残留导致 el8 leapp 装不上 | `rpm -e --nodeps` 删旧 leapp 包 + 删 /etc/leapp/files（hop.sh prep/post 已处理） |
 | `Remote root logins globally allowed using password` | 若 sshd_config 显式写了 `PermitRootLogin yes` 则只是提示；**没写的话 EL9 默认 prohibit-password，root 密码登录会失联**，先显式写上 |
 | python2 | EL9 没有 python2。确认无人依赖后移除（hop.sh prep 会检查依赖）；有依赖的脚本先改 python3 |
+| ★ `Network configuration for unsupported device types`：`ifcfg-eth0.bak` | 手工留下的备份副本也被当成配置。`hop.sh answer` 在 migrate 前把 `ifcfg-*.bak/.orig/.old/~` 挪到工具目录 |
+| ★★ 重启进升级环境几秒就 `Entering emergency mode`，VNC 里敲命令没反应 | fstab 里有 bind 到 /sys 的条目（阿里云 `set_ecs_special.sh` 的 `eth0-speed.mock`）。leapp 把 fstab 固化成升级 initramfs 的 mount unit，挂不上就进 emergency，shell 在 ttyS0。`hop.sh up` 现在自动注释（EL10 post 恢复）；已经中招见 recovery.md B2 |
 | ★ 宿主机 docker 容器正常但 Yearning 无限重启：`open /sys/fs/cgroup/memory/memory.limit_in_bytes: no such file` | EL9 起默认 cgroup v2。见 app-compat.md "cgroup v2" |
 
 ## 5. 9 → 10
@@ -196,6 +211,20 @@
 **★ ssmtp 在 7→8 被删除（EL8 没有这个包）**：如果 `/etc/ssmtp/ssmtp.conf` 里配了 `mailhub`，说明机器用它发过邮件，升级后可以改用 EPEL 的 `msmtp`（配置格式相近），并写进报告。
 
 **★ LNMP 一键包的 `/home/wwwlogs` 是 777**：自己加的 logrotate 会因为 "parent directory has insecure permissions" 跳过，需要在配置里加 `su root root`。
+
+**★ 容器里的 iptables-legacy（wg-easy 等）：`can't initialize iptables table 'nat': Table does not exist`**
+- 原因：EL10 宿主机用 nft，legacy 的 `iptable_nat` 等模块默认不加载，容器又没有挂 /lib/modules。
+- 处理：`finalize.sh iptables-legacy`（加载并写入 modules-load.d），然后 `docker restart <容器>`。
+
+**★ redis 服务消失（EL10 没有 redis 包）**：leapp 装了 valkey 但不迁移数据、不启用。`finalize.sh redis-valkey`：迁移 dump/aof、启用 valkey、提供 redis-cli 兼容链接；旧配置有 requirepass 的要手工写进 valkey.conf。
+
+**★ postfix 起不来：`inet_interfaces: no local interface found for ::1`**：系统禁用了 IPv6，而 `inet_protocols = all`。改 `postconf -e inet_protocols=ipv4`（`finalize.sh postfix-lmdb` 顺手检查）。
+
+**★ 宿主机 nacos 起得慢，开机后依赖它的容器"运行中但没有端口"**
+- 现象：容器 Up，但应用启动时注册 nacos 失败后退出了 Spring 上下文，进程还在，Docker 不会重启它。
+- 处理：nacos 就绪后 `docker restart` 这些容器；长期方案：容器的启动脚本在注册失败时退出（让 restart 策略生效），或给容器加对 nacos 的等待。这不是升级引起的，任何一次重启都会发生。
+
+**★ Kubernetes 节点**：见 `kubernetes.md`（pod 里老 JDK 在 cgroup v2 下 OOMKilled、Dead 容器导致 kubelet 起不来、NFS PVC 阻断 leapp、启动风暴等）。
 
 **★ 证书即将过期**：迁移 nginx 时顺手 `openssl x509 -noout -enddate` 检查，写进报告。
 

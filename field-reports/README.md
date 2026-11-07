@@ -18,6 +18,7 @@
 ## 索引
 | 日期 | 云 | 画像 | 路径 | 结果 | 报告 |
 |---|---|---|---|---|---|
+| 2026-11-07 | 阿里云 | **K8s 1.21 集群 3 master + 3 worker**（dockershim/flannel/ipvs/stacked etcd/NFS 存储类，约 120 pod）+ 宿主机 50 个容器、手工启动的 Java、OpenVPN/wg-easy | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2（K8s 版本不变） | ✅ 成功（约 6.5 小时；2 台 master 进 emergency 后救回；新增 k8s.sh） | [link](2026-11-07-aliyun-k8s-1.21-3m3w.md) |
 | 2026-11-06 | 阿里云 | 测试应用机：PHP 应用容器 ×4 + MySQL8/Redis 容器 + 宿主机 tarball MySQL 5.7 + cron docker exec | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（全程脚本，约 1.9 小时；修复 4 处） | [link](2026-11-06-aliyun-test-apps-hostmysql-centos7.md) |
 | 2026-11-06 | 阿里云 | 镜像仓库 Harbor + YApi + MySQL 容器 + 雷池 WAF + 自编译 LNMP | CentOS 7.6 → 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（首台全程用脚本完成的 CentOS 7；执行中修复 12 处脚本问题） | [link](2026-11-06-aliyun-registry-waf-lnmp-centos7.md) |
 | 2026-11-06 | 阿里云 | 堡垒机（JumpServer 11 个容器）+ openresty 容器 + firewalld | CentOS 8.3 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（首次全程使用脚本；执行中修复 9 处脚本问题） | [link](2026-11-06-aliyun-bastion-docker-centos8.md) |

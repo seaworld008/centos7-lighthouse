@@ -48,7 +48,27 @@ t "hop.sh report parses leapp json" bash -c "bash '$K/hop.sh' report 2>&1 | tee 
 unset LEAPP_LOG_DIR
 
 t "hop.sh usage"        bash -c "bash '$K/hop.sh' | grep -q 'hop.sh prep'"
-t "finalize.sh usage"   bash -c "bash '$K/finalize.sh' | grep -q compose-wrapper"
+t "finalize.sh usage"   bash -c "bash '$K/finalize.sh' | grep -q compose-wrapper && bash '$K/finalize.sh' | grep -q manual-procs"
+t "k8s.sh usage"        bash -c "bash '$K/k8s.sh' | grep -q 'k8s.sh backup' && bash '$K/k8s.sh' | grep -q jvm-maxram"
+t "k8s.sh pods 无 kubectl 时优雅退出" bash -c "out=\$(bash '$K/k8s.sh' pods 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'kubectl 连不上'"
+t "k8s.sh check 无 kubelet/docker 不报 shell 错" bash -c "! bash '$K/k8s.sh' check 2>&1 | grep -E 'syntax error|unbound variable|bad substitution'"
+# ---- 会修改系统、但对任何 EL 版本都安全的测试（只在一次性容器里）----
+if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
+  printf '[kubernetes]\nname=k8s\nbaseurl=https://example.com/kubernetes-el7-x86_64\nenabled=1\n' > /etc/yum.repos.d/kubernetes.repo
+  t "k8s.sh pin 在 k8s 源里 exclude 组件" bash -c "bash '$K/k8s.sh' pin >/dev/null; grep -q '^exclude=kubelet kubeadm kubectl' /etc/yum.repos.d/kubernetes.repo"
+  t "k8s.sh pin 幂等" bash -c "bash '$K/k8s.sh' pin >/dev/null; [ \$(grep -c '^exclude=' /etc/yum.repos.d/kubernetes.repo) = 1 ]"
+  rm -f /etc/yum.repos.d/kubernetes.repo
+  cp /etc/fstab /tmp/fstab.orig 2>/dev/null || : > /tmp/fstab.orig
+  echo '10.0.0.9:/data/k8s /nfsdata nfs defaults 0 0' >> /etc/fstab
+  t "k8s.sh nfs-off 注释 fstab 的 NFS" bash -c "bash '$K/k8s.sh' nfs-off >/dev/null 2>&1; grep -q '^#osup-nfs# 10.0.0.9:/data/k8s' /etc/fstab"
+  t "k8s.sh nfs-on 恢复 fstab" bash -c "sed -i 's/^#osup-nfs# //' /etc/fstab; grep -q '^10.0.0.9:/data/k8s' /etc/fstab"
+  cp /tmp/fstab.orig /etc/fstab
+  mkdir -p $W/mp /etc/systemd/system
+  printf '/usr/bin/java\n-Xmx512m\n-jar\napp.jar\n' > $W/mp/123.cmdline; echo /data/demo/svc > $W/mp/123.cwd; echo /usr/bin/java > $W/mp/123.exe
+  printf 'PATH=/usr/bin:/bin\nLANG=en_US.UTF-8\nSECRET=x\n' > $W/mp/123.environ
+  t "finalize.sh manual-procs 生成 systemd 服务（不带无关环境变量）" bash -c "bash '$K/finalize.sh' manual-procs $W/mp >/dev/null 2>&1; f=/etc/systemd/system/osup-demo-svc.service; grep -q 'ExecStart=/usr/bin/java \"-Xmx512m\" \"-jar\" \"app.jar\"' \$f && grep -q 'WorkingDirectory=/data/demo/svc' \$f && ! grep -q SECRET \$f"
+  rm -f /etc/systemd/system/osup-demo-svc.service
+fi
 if [ "$(rpm -E %rhel 2>/dev/null)" = 7 ]; then
   t "prep-el7.sh usage on EL7"   bash -c "bash '$K/prep-el7.sh' | grep -q 'prep-el7.sh repos'"
 else

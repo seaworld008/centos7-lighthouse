@@ -105,6 +105,14 @@ pre)
   bgrun leapp-pre-$TGT "leapp preupgrade"; bash "$0" report ;;
 
 up)
+  # leapp 在生成升级 initramfs 时把 fstab 的每一项做成 mount unit 固化进去；bind 到 /sys /proc /dev /run 的条目
+  # （如阿里云 set_ecs_special.sh 写的 eth0-speed.mock → /sys/class/net/eth0/speed）在升级环境里挂不上 → 进 emergency
+  # （真实踩坑，nofail 也没用；shell 在 ttyS0，VNC 里敲不了命令）。必须在 leapp upgrade 之前注释，事后再改 fstab 无效
+  if grep -qE '^[^#]\S*\s+/(sys|proc|dev|run)/\S*\s+\S+\s+\S*bind' /etc/fstab; then
+    cp -n /etc/fstab "$K/fstab.before-bind-off"
+    grep -E '^[^#]\S*\s+/(sys|proc|dev|run)/\S*\s+\S+\s+\S*bind' /etc/fstab | sed 's/^/临时注释 fstab bind 挂载（EL10 的 post 自动恢复）: /'
+    sed -i -E 's@^([^#]\S*\s+/(sys|proc|dev|run)/\S*\s+\S+\s+\S*bind.*)$@#osup-bind# \1@' /etc/fstab
+  fi
   bgrun leapp-up-$TGT "leapp upgrade"
   grep -E "Errors:|Inhibitors:|Reboot the system" $K/leapp-up-$TGT.log
   grep -A6 "following errors" $K/leapp-up-$TGT.log
@@ -170,6 +178,11 @@ answer)
   if [ "$CUR" -ge 8 ] && ls /etc/sysconfig/network-scripts/ifcfg-* >/dev/null 2>&1 && nmcli connection migrate --help >/dev/null 2>&1      && { [ "$CUR" = 9 ] || grep -q "unsupported device types" $LL/leapp-report.txt 2>/dev/null; }; then
     before=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
     cp -a /etc/sysconfig/network-scripts "$K/network-scripts.bak.$(date +%s)"
+    # 手工留下的备份副本（ifcfg-eth0.bak 等）不是有效配置，NM 迁移不了，leapp 会一直报阻断 → 挪到工具目录（真实踩坑）
+    for f in /etc/sysconfig/network-scripts/ifcfg-*; do
+      [ -e "$f" ] || continue
+      case "$f" in *.bak|*.backup|*.orig|*.old|*.save|*.rpmsave|*.rpmnew|*~|*.bak[0-9]*|*-bak*) mkdir -p "$K/ifcfg-backups"; mv "$f" "$K/ifcfg-backups/"; echo "挪走 ifcfg 备份副本: $f";; esac
+    done
     nmcli connection migrate 2>&1 | tail -3
     after=$(ip -4 -o addr show scope global | awk '{print $2,$4}' | sort; ip route show default)
     if [ "$before" = "$after" ]; then echo "ifcfg → keyfile 迁移完成，地址/默认路由不变"; else echo "!! 迁移前后网络有变化，立即检查:"; echo "$before"; echo "---"; echo "$after"; fi
@@ -182,6 +195,8 @@ reboot)
   shift
   grep -q "Reboot the system" $K/leapp-up-$TGT.log 2>/dev/null || echo "WARN: 没看到本跳 leapp upgrade 成功的输出，确认是升级重启还是普通重启"
   NOSTOP=0; [ "$1" = --no-stop ] && { NOSTOP=1; shift; echo "--no-stop：不提前停止任何容器"; }
+  # K8s 节点：先停 kubelet 并有序停止 pod 容器，否则 kubelet 会在关机途中把容器重新拉起
+  [ $NOSTOP = 0 ] && systemctl is-active kubelet >/dev/null 2>&1 && bash "$(dirname "$0")/k8s.sh" stop
   if [ $NOSTOP = 0 ] && command -v docker >/dev/null && docker info >/dev/null 2>&1; then
     for c in $(docker ps -q); do
       n=$(docker inspect -f '{{.Name}}' $c | tr -d /); img=$(docker inspect -f '{{.Config.Image}}' $c); pol=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' $c)
@@ -259,6 +274,10 @@ post)
       [ -n "$f" ] && [ -e "$f" ] && ! rpm -qf "$f" >/dev/null 2>&1 && { systemctl disable $u.service >/dev/null 2>&1; mkdir -p "$K/cloud-init-units"; mv "$f" "$K/cloud-init-units/"; echo "挪走源码安装的 cloud-init unit: $f"; }
     done
     systemctl daemon-reload; systemctl reset-failed 2>/dev/null
+  fi
+  # 到达 EL10（最后一跳）后恢复 up 时临时注释的 bind 挂载
+  if [ "$CUR" -ge 10 ] && grep -q "^#osup-bind# " /etc/fstab; then
+    sed -i -E 's/^#osup-bind# //' /etc/fstab; systemctl daemon-reload; mount -a 2>&1 | head -3; echo "已恢复 fstab bind 挂载（#osup-bind#）"
   fi
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
