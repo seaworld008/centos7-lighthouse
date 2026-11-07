@@ -29,7 +29,7 @@
 1. **绝不提交敏感信息**：真实 IP、域名、主机名、账号、密码、密钥、客户/公司名、私有镜像仓库地址。示例统一用 `10.0.0.x`、`example.com`。提交前必须 `python tools/check_repo.py` 通过（CI 还有 gitleaks）。
 2. **诚实标注验证状态**：只在真实机器上跑通过的才写"已验证"。CHANGELOG 和 PR 描述里区分 `verified-on-real-run` 与 `untested`。
 3. **脚本兼容性**：`scripts/*.sh` 必须在 EL7 到 EL10 都能运行：
-   - bash 4.2，不用 `ss -H`、`mapfile -d`、`${var@Q}` 等新特性
+   - bash 4.2，不用 `ss -H`、`mapfile -d`、`${var@Q}` 等新特性；**`case ... pattern)` 不要写在 `$( )` 里**（4.2 会因括号不配对报语法错，EL8+ 的 bash 不报，只有 centos:7 冒烟测试抓得到），放进函数
    - EL7 上没有 python3，需要 Python 的地方用 `$PY` 回退到 python2
    - 内嵌 Python 第一行写 `# -*- coding: utf-8 -*-`，并加 `from __future__ import print_function, unicode_literals`；调用时加 `PYTHONIOENCODING=utf-8`。原因：脚本都设置了 `LC_ALL=C`，在这种环境下 py2 和 py3.6 输出中文会直接崩溃。EL10 的 py3.12 不会崩，所以只在新系统上测试发现不了（CI 冒烟测试因此抓到过这个问题）
    - 每个 `for f in dir/*` 都要先判断 `[ -e "$f" ] || continue`
