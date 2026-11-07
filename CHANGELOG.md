@@ -5,7 +5,24 @@
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.0] - 2026-11-07
+
+第一次 Kubernetes 集群原地升级：阿里云 kubeadm 1.21 测试集群 3 master + 3 worker，CentOS 7 → AlmaLinux 10.2，**K8s 版本不变**（dockershim + Docker 29 + cgroup v2 实测可用）。见 [实战报告](field-reports/2026-11-07-aliyun-k8s-1.21-3m3w.md)。
+
+### Added（均为 `verified-on-real-run`）
+- `k8s.sh`：`backup`（etcd 快照、/etc/kubernetes、二进制、pod 列表、资源 YAML；自动 `pin`）、`pin`（k8s 源 exclude kubelet/kubeadm/kubectl/cni/cri-tools，防止 `dnf upgrade` 升 minor）、`stop`（停 kubelet 后按 业务→控制面→etcd 顺序停容器；`hop.sh reboot` 遇到 kubelet 自动调用）、`nfs-off`/`nfs-on`（leapp 的 NFS 阻断项）、`nm`（NM 不接管 cni0/flannel/veth 等）、`fix`（modules-load.d、sysctl、删 Dead 容器、cgroup 驱动一致性）、`check`、`pods`（与升级前按 namespace 对比）、`jvm-maxram`（cgroup v2 下老 JDK 认不出内存限制 → 注入 `JAVA_TOOL_OPTIONS=-XX:MaxRAM=$(limits.memory)`）
+- `references/kubernetes.md`：开工前要弄清的事、兼容性结论、推荐顺序、踩坑表、恢复检查清单
+- `finalize.sh`：`iptables-legacy`（容器内 legacy iptables，如 wg-easy）、`redis-valkey`、`manual-procs`（升级前手工启动的进程 → systemd 服务）；`postfix-lmdb` 在禁用 IPv6 时改 `inet_protocols=ipv4`
+- `backup.sh`：记录从 SSH 会话手工启动、正在监听端口的进程（cmdline/cwd/exe/环境变量）
+- `survey.sh`：fstab bind 到 /sys|/proc|/dev|/run → BLOCKER；rpm 重复包 → HIGH；手工启动的服务进程 → HIGH；K8s 节点 BLOCKER 改为指向 kubernetes.md，并提示 cgroup v2 老 JDK
+- `recovery.md` B2：升级环境里很早进 emergency、VNC 敲不了命令（shell 在 ttyS0）；看串口日志；用 noVNC JS 抓 1 秒的 GRUB 菜单回旧内核
+
+### Fixed（均为 `verified-on-real-run`）
+- ★ `hop.sh up`：leapp 把 fstab 固化进升级 initramfs，bind 到 /sys 的条目（阿里云 `set_ecs_special.sh`）会让升级环境进 emergency → `leapp upgrade` 前自动注释（`#osup-bind#`），EL10 的 `post` 恢复
+- `hop.sh answer`：`ifcfg-*.bak/.orig/.old/~` 备份副本会让 8→9 一直报 unsupported device types → migrate 前挪走
+- `prep-el7.sh update`：排除 `kube*`、`cri-tools`
+- `prep-el7.sh inhibitors`：保留"最新已安装内核"的 kernel-devel（而不是运行中的），避免 update 后出现两个
+- `state.sh`：不把 kubelet 管理的 `k8s_` 容器、127.0.0.1 上的临时端口（如 dockershim 随机端口）记进基线
 - `verify.sh`：先判断 unit 是否还存在。已卸载的 unit 也会返回 `ConditionResult=no`，以前会被误报为"条件不满足、预期跳过"，现在报 WARN，交给人判断（`verified-on-real-run`）
 - `hop.sh`：改写镜像时的 `.orig` 备份放到工具目录，不再留在 `/etc/yum.repos.d`
 

@@ -41,6 +41,11 @@ grep -vE "^\s*#|^\s*$" /etc/fstab
 VARFREE=$(df -Pm /var | awk 'NR==2{print $4}'); BOOTFREE=$(df -Pm /boot | awk 'NR==2{print $4}')
 [ "${VARFREE:-0}" -lt 5000 ] && flag HIGH "/var 可用 ${VARFREE}MB < 5GB：leapp 下载+容器环境需要 3~5GB，先清理（docker 无用镜像、日志、yum 缓存）"
 [ "${BOOTFREE:-0}" -lt 250 ] && flag HIGH "/boot 可用 ${BOOTFREE}MB < 250MB：先删旧内核 (package-cleanup --oldkernels --count=1)"
+grep -qE '^[^#]\S*\s+/(sys|proc|dev|run)/\S*\s+\S+\s+\S*bind' /etc/fstab && flag BLOCKER "fstab 里有 bind 到 /sys|/proc|/dev|/run 的挂载（如阿里云 set_ecs_special.sh 的 eth0-speed.mock）：leapp 升级环境里挂不上直接进 emergency（shell 在串口，VNC 敲不了）。hop.sh up 会在 leapp upgrade 前自动注释，EL10 后恢复"
+d=$(rpm -qa --qf '%{NAME}.%{ARCH}\n' 2>/dev/null | grep -vE '^(gpg-pubkey|kernel|kernel-devel|kernel-core|kernel-modules)\.' | sort | uniq -d | tr '\n' ' ')
+[ -n "$d" ] && flag HIGH "rpm 库里有重复包（以前的 yum 事务没做完）：$d→ yum update 会报 multilib/保护版本错误。先 package-cleanup --cleandupes；删不掉的旧副本 rpm -e --justdb --nodeps，再 update 并 reinstall 这些包"
+mp=$(for p in $(ps -eo pid=); do grep -q "session-[0-9]*\.scope" /proc/$p/cgroup 2>/dev/null || continue; grep -qE "docker|kubepods" /proc/$p/cgroup 2>/dev/null && continue; case "$(cat /proc/$p/comm 2>/dev/null)" in bash|sh|sshd|sudo|su|sleep|tail|ps|grep|top|screen|tmux*) continue;; esac; ss -lntp 2>/dev/null | grep -q "pid=$p," && cat /proc/$p/comm; done | sort | uniq -c | tr '\n' ' ')
+[ -n "$mp" ] && flag HIGH "有手工从 SSH 会话启动、正在监听端口的服务进程（$mp）：重启后不会自己起来。backup.sh 会记录命令行/目录/环境变量，升级后 finalize.sh manual-procs 生成 systemd 服务"
 grep -qE "\s(nfs|cifs|glusterfs)\s" /etc/fstab && flag MEDIUM "fstab 有网络文件系统：升级环境里可能挂载失败，升级前临时注释 noauto/nofail"
 lsblk -o FSTYPE 2>/dev/null | grep -qi vdo && flag HIGH "存在 VDO 设备：8→9 前需转换为 LVM-VDO"
 lsblk -o FSTYPE 2>/dev/null | grep -qi btrfs && flag BLOCKER "使用 btrfs：EL8+ 不支持 btrfs"
@@ -122,7 +127,8 @@ sec KUBERNETES
 for b in kubectl helm kubeadm kubelet crictl k9s kubeconfig kubeconf; do has $b && echo "$b: $(command -v $b) $($b version --client --short 2>/dev/null || $b version --short 2>/dev/null | head -1)"; done
 ls -la /root/.kube/ 2>/dev/null; grep -rn "KUBECONFIG\|kubectl\|kubeconf" /root/.bashrc /root/.bash_profile /etc/profile.d/ 2>/dev/null
 has kubectl && timeout 20 kubectl version 2>/dev/null | grep -i server
-systemctl is-active kubelet >/dev/null 2>&1 && flag BLOCKER "本机是 Kubernetes 节点（kubelet 运行中）：不要原地升级，先 drain，建议换新节点"
+systemctl is-active kubelet >/dev/null 2>&1 && flag BLOCKER "本机是 Kubernetes 节点（kubelet 运行中）：这是集群级变更，不能单台随手升。按 references/kubernetes.md 规划（访问路径是否在集群里、控制面入口、etcd、NFS 存储位置、能否整体中断），用 k8s.sh backup/pin/stop/fix/pods；换新节点也是选项"
+systemctl is-active kubelet >/dev/null 2>&1 && flag INFO "K8s 节点到 EL10 后只有 cgroup v2：pod 里 8u372 / 11.0.16 之前的老 JDK 认不出容器内存限制，会按宿主机内存算堆而 OOMKilled → 恢复后用 k8s.sh jvm-maxram"
 [ "$MAJOR" -lt 10 ] && rpm -q kubectl >/dev/null 2>&1 && flag INFO "kubectl 是 rpm 安装（$(rpm -q kubectl)）：升级后换成与集群版本匹配的 pkgs.k8s.io 源"
 
 sec RUNTIMES/DATABASES

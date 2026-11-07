@@ -17,10 +17,13 @@ systemctl list-units --type=service --state=active --no-legend --no-pager 2>/dev
   | grep -vE "^(user@|user-runtime-dir@|session-|run-|leapp|systemd-|dracut|kmod|plymouth|getty@|serial-getty@|lvm2-pvscan@|initrd|sshd-keygen@|rhel-|cloud-|kdump|import-state|selinux|ldconfig|dnf-makecache|NetworkManager-wait-online|nis-domainname|loadmodules|network.service|rpc-statd|var-lib|blk-availability|microcode|readonly-root)" \
   | sort -u | sed 's/^/unit\t/'
 
-ss -tlnu 2>/dev/null | tail -n +2 | awk '{split($5,a,":"); p=a[length(a)]; print "port\t" $1 "/" p}' | sort -u   # EL7 的 ss 没有 -H
+# 只监听 127.0.0.1 的临时端口（≥32768，如 kubelet 的 dockershim streaming 端口）每次启动都随机 → 不进基线
+EPH=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null); EPH=${EPH:-32768}
+ss -tlnu 2>/dev/null | tail -n +2 | awk -v e="$EPH" '{split($5,a,":"); p=a[length(a)]; if ($5 ~ /^127\./ && p+0 >= e) next; print "port\t" $1 "/" p}' | sort -u   # EL7 的 ss 没有 -H
 
 if command -v docker >/dev/null 2>&1; then
-  docker ps -a --format '{{.Names}}\t{{.State}}' 2>/dev/null | sort | sed 's/^/ctr\t/'
+  # k8s_ 开头的是 kubelet 管理的 pod 容器（名字带 pod hash 和重启次数，重启后必然变化）→ 不进基线，用 k8s.sh pods 在集群层面对比
+  docker ps -a --format '{{.Names}}\t{{.State}}' 2>/dev/null | grep -v '^k8s_' | sort | sed 's/^/ctr\t/'
 fi
 
 # nginx 虚拟主机探测：宿主机 nginx + 容器里的 nginx/openresty/tengine（docker-proxy 映射到本机 80/443）
@@ -46,7 +49,7 @@ NG=$(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | he
   done
 # 所有 TCP 端口按 IP 做 http 探测（443 用 https；非 http 服务稳定返回 000，作为基线照样可比）
 SSHP=$(sshd -T 2>/dev/null | awk '/^port /{print $2}')
-ss -tln 2>/dev/null | tail -n +2 | awk '{split($4,a,":"); print a[length(a)]}' | sort -un | while read -r p; do
+ss -tln 2>/dev/null | tail -n +2 | awk -v e="$EPH" '{split($4,a,":"); p=a[length(a)]; if ($4 ~ /^127\./ && p+0 >= e) next; print p}' | sort -un | while read -r p; do
   case "$p" in 22|25|111|323|10050) continue;; esac
   echo " $SSHP " | grep -q " $p " && continue
   sch=http; [ "$p" = 443 ] || [ "$p" = 8443 ] && sch=https

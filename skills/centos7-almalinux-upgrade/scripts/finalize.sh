@@ -7,6 +7,9 @@
 #   bash finalize.sh postfix-lmdb             postfix 的 hash:/btree: 表改 lmdb:（EL10 无 libdb）并重建
 #   bash finalize.sh nginx-repo               添加 nginx.org 官方 stable 源并安装 nginx（不改配置、不启动）
 #   bash finalize.sh cgroupv1-shim <compose目录>  给需要 cgroup v1 内存文件的老应用挂只读兼容文件并重建容器
+#   bash finalize.sh iptables-legacy         加载并持久化 legacy iptables 表模块（容器内用 iptables-legacy 的镜像，如 wg-easy）
+#   bash finalize.sh redis-valkey            redis → valkey（EL10 无 redis）：迁移 dump/aof、启用 valkey、redis-cli 兼容链接
+#   bash finalize.sh manual-procs <DIR>      把升级前手工启动的进程（backup.sh 记录在 <BACKUP>/manual-procs）生成 systemd 服务
 #   bash finalize.sh sysv-units              为仍靠 SysV init 脚本启动的服务生成原生 systemd unit（防止将来 systemd 去掉 sysv 支持）
 export LC_ALL=C
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -56,6 +59,8 @@ postfix-lmdb)
   done
   postconf -e "default_database_type = lmdb" 2>/dev/null
   newaliases; for f in $(postconf -n | grep -oE "lmdb:[^ ,]+" | sed 's/lmdb://' | sort -u); do [ "$f" != /etc/aliases ] && [ -f "$f" ] && postmap "lmdb:$f"; done
+  # 禁用了 IPv6 时 inet_protocols=all 会让 postfix 报 "no local interface found for ::1"（真实踩坑）
+  ip -6 addr show lo 2>/dev/null | grep -q "::1" || { [ "$(postconf -h inet_protocols)" = all ] && postconf -e inet_protocols=ipv4 && echo "IPv6 已禁用 → inet_protocols=ipv4"; }
   systemctl restart postfix; systemctl is-active postfix
   echo test | sendmail root && sleep 2 && journalctl -u postfix --since -1min --no-pager -o cat | grep -E "status=" | tail -1 ;;
 
@@ -106,5 +111,36 @@ EOF
   done
   systemctl daemon-reload; echo "检查后执行 systemctl enable <name>；当前正在运行的不要 restart，下次开机生效" ;;
 
-*) sed -n '2,12p' "$0";;
+iptables-legacy) # 容器里用 iptables-legacy 的镜像（如 wg-easy）：EL10 默认不加载 legacy 表 → "can't initialize iptables table nat"（真实踩坑）
+  printf 'ip_tables\niptable_nat\niptable_filter\niptable_mangle\nip6_tables\nip6table_nat\nip6table_filter\n' > /etc/modules-load.d/iptables-legacy-for-containers.conf
+  while read -r m; do modprobe "$m" 2>/dev/null; done < /etc/modules-load.d/iptables-legacy-for-containers.conf
+  echo "已加载并持久化 legacy iptables 模块：$(lsmod | grep -cE '^(ip|ip6)table_') 个表模块；重启相关容器（docker restart <name>）" ;;
+
+redis-valkey) # EL10 没有 redis 包，leapp 换成 valkey 但不迁移数据/不启用（真实踩坑：redis.service 消失）
+  rpm -q valkey >/dev/null 2>&1 || dnf -y install valkey 2>&1 | tail -1
+  old=$(ls /etc/redis/redis.conf.rpmsave /etc/redis.conf.rpmsave /etc/redis/redis.conf /etc/redis.conf 2>/dev/null | head -1)
+  [ -n "$old" ] && { echo "旧配置 $old 的关键项（核对后按需写进 /etc/valkey/valkey.conf）:"; grep -E "^(bind|port|requirepass|maxmemory|appendonly|save|dir|dbfilename) " "$old" | sed -E 's/^(requirepass ).*/\1***/'; }
+  for f in /var/lib/redis/dump.rdb /var/lib/redis/appendonly.aof; do [ -f "$f" ] && [ ! -f "/var/lib/valkey/$(basename $f)" ] && install -o valkey -g valkey -m 640 "$f" /var/lib/valkey/ && echo "数据 $f → /var/lib/valkey/"; done
+  grep -qE "^requirepass " "$old" 2>/dev/null && echo "!! 旧配置有 requirepass：请把同样的密码写进 /etc/valkey/valkey.conf 再启动"
+  for b in cli server benchmark; do [ -e /usr/local/bin/redis-$b ] || ln -s /usr/bin/valkey-$b /usr/local/bin/redis-$b; done
+  systemctl enable --now valkey 2>&1 | tail -1; sleep 2; redis-cli ping 2>&1 | head -1 ;;
+
+manual-procs) # 升级前手工从 SSH 会话启动（nohup ... &）的进程，重启后不会自己起来：按 backup.sh 记录的 cmdline/cwd/环境变量生成 systemd 服务
+  D=${2:?用法: finalize.sh manual-procs <BACKUP_DIR>/manual-procs}
+  for c in "$D"/*.cmdline; do
+    [ -e "$c" ] || continue
+    p=${c%.cmdline}; cwd=$(cat "$p.cwd"); exe=$(cat "$p.exe" 2>/dev/null)
+    name=osup-$(echo "$cwd" | sed -E 's#^/(data|opt|home|root)/##; s#/bin$##; s#/.*/#-#; s#[^A-Za-z0-9_.]+#-#g')
+    [ -e "/etc/systemd/system/$name.service" ] && { echo "已存在 $name，跳过"; continue; }
+    first=$(head -1 "$c"); case "$first" in /*) ;; *) [ -n "$exe" ] && first=$exe;; esac
+    args=$(tail -n +2 "$c" | sed 's/%/%%/g' | awk '{gsub(/"/,"\\\""); printf " \"%s\"", $0}')
+    envs=$(grep -E '^(PATH|JAVA_HOME|LANG|LC_ALL|CLASSPATH)=' "$p.environ" 2>/dev/null | sed 's/^/Environment="/; s/$/"/')
+    printf '[Unit]\nDescription=Restored manual process in %s (was started by hand before the OS upgrade)\nAfter=network-online.target docker.service\nWants=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=%s\n%s\nExecStart=%s%s\nSuccessExitStatus=143\nTimeoutStopSec=60\n\n[Install]\nWantedBy=multi-user.target\n' \
+      "$cwd" "$cwd" "$envs" "$first" "$args" > "/etc/systemd/system/$name.service"
+    echo "生成 $name: $first $(tail -n +2 "$c" | tr '\n' ' ' | cut -c1-80)"
+  done
+  systemctl daemon-reload
+  echo "检查 /etc/systemd/system/osup-*.service 后：systemctl enable --now <name>（LANG=zh_CN.GB18030 等需要 glibc-langpack-zh）" ;;
+
+*) sed -n '2,15p' "$0";;
 esac

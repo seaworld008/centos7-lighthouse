@@ -55,6 +55,20 @@ for b in kubectl helm docker-compose; do p=$(command -v $b) && cp -a "$p" "bin-$
 for n in $(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | sort -u); do $n -V > nginx-V.txt 2>&1; $n -T > nginx-T.txt 2>/dev/null; done
 command -v php >/dev/null && { php -m > php-m.txt; php -i > php-i.txt; } 2>/dev/null
 
+# 手工从 SSH 会话启动的常驻进程（nohup java -jar ... &）：重启后不会自己起来，升级后用 finalize.sh manual-procs 恢复（真实踩坑：5 个宿主机 Java 程序）
+for pid in $(ps -eo pid=); do
+  cg=$(cat /proc/$pid/cgroup 2>/dev/null) || continue
+  echo "$cg" | grep -q "session-[0-9]*\.scope" || continue
+  echo "$cg" | grep -qE "docker|kubepods|containerd" && continue
+  comm=$(cat /proc/$pid/comm 2>/dev/null)
+  case "$comm" in bash|sh|zsh|sshd|sudo|su|screen|tmux*|ps|grep|sleep|tail|less|vim|vi|top|backup.sh|state.sh|systemd*|sftp-server|login|crond|timeout) continue;; esac
+  ss -lntp 2>/dev/null | grep -q "pid=$pid," || continue   # 只记录在监听端口的（真正的服务）
+  mkdir -p manual-procs
+  tr '\0' '\n' < /proc/$pid/cmdline > manual-procs/$pid.cmdline; readlink /proc/$pid/cwd > manual-procs/$pid.cwd
+  readlink /proc/$pid/exe > manual-procs/$pid.exe; tr '\0' '\n' < /proc/$pid/environ > manual-procs/$pid.environ 2>/dev/null
+  echo "手工启动的服务进程 pid=$pid $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-100)"
+done
+
 bash "$HERE/state.sh" > baseline.tsv 2>/dev/null
 echo "---- 业务基线 baseline.tsv ----"; cat baseline.tsv
 echo; du -sh "$B"
