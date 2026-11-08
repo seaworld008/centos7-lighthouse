@@ -126,6 +126,18 @@ inhibitors)
   rpm -q postfix mariadb-libs 2>&1 | tr '\n' ' '; echo
   echo "--- 4. 第三方 *-release 源包（7→8 用不上）"
   rpm -qa --qf '%{NAME}\n' | grep -E "^(webtatic-release|nginx-release-centos|ius-release|remi-release|elrepo-release|mysql[0-9]*-community-release)$" | xargs -r yum -y remove 2>&1 | tail -1
+  echo "--- 5. 孤立的 Remi 兼容库（libwebp7/libzip5/libicu69 等）"
+  # 宿主机 PHP 已迁走（容器化/卸载）后留下的 Remi 库，和 EL8 的 libwebp/libzip 文件冲突 → leapp 在 dnf_package_download 报
+  # "Transaction test error: file /usr/lib64/libwebp.so.7 ... conflicts"（preupgrade 查不出来，真实踩坑）。宿主机还有 Remi 的 php 时不动
+  remi=$(rpm -qa --qf '%{NAME}\t%{VENDOR}\n' | awk -F'\t' 'tolower($2) ~ /remi/ {print $1}')
+  if [ -n "$remi" ]; then
+    if echo "$remi" | grep -qE '^php[0-9]*(-|$)'; then echo "!! 宿主机还装着 Remi 的 PHP（$(echo "$remi" | grep -E '^php' | head -3 | tr '\n' ' ')），先按 app-compat.md 的 PHP 段处理"
+    else
+      # 只在没有非 Remi 包依赖它们时删除
+      others=$(yum remove --assumeno $remi 2>&1 | sed -n '/^Removing/,/^Transaction Summary/p' | awk 'NF>=4 && $1 !~ /^(Removing|Transaction)/{print $1}' | grep -vxF "$remi")
+      if [ -n "$others" ]; then echo "!! 删除 Remi 库会连带删除: $others —— 人工确认"; else echo "删除: $(echo $remi)"; yum -y remove $remi 2>&1 | tail -1; fi
+    fi
+  fi
   echo "完成。下一步：hop.sh prep <MIRROR>（会再检查 pip 冲突、装 ELevate；pam_pkcs11 等问题由 hop.sh answer 回答）"
   ;;
 

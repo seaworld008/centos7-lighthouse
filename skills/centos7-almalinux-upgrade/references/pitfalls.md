@@ -76,6 +76,19 @@
 - 老版本（如 1.16.x）的签名者公钥已不在 nginx.org/keys → 按 key ID 从 keyserver.ubuntu.com 获取
 - 国内服务器下载 GitHub 上的 OpenSSL 超时 → 在本机下载后上传到 `/usr/local/src/nginx-static/`；残缺文件会被 sha256 校验发现并删除
 - 运行中的二进制 `cp` 覆盖会报 `Text file busy` → 先复制再 `mv` 替换
+- 原二进制已经是 OpenSSL 3.x 编译的（`nginx -V` 显示 `built with OpenSSL 3.5.9`，只有 `libpcre.so.1` 是 EL7 依赖）→ 不要降回脚本默认的 1.1.1w：`NGX_OPENSSL=openssl-3.5.9 NGX_OPENSSL_SHA256=<官方 .sha256> bash nginx-static-build.sh ...`。EL7 的 gcc 4.8.5 能编 OpenSSL 3.5（需要 perl-IPC-Cmd，脚本会装）
+- 静态重编后仍依赖 `libcrypt.so.1`（auth_basic 用）：EL9 起要 `libxcrypt-compat`，见 8→9 一节
+
+**★ `yum update` 整个事务失败，系统停在 7.6：第三方源的包出问题**
+- `mysql-community-client-8.0.46 ... The GPG keys listed for the "MySQL 8.0 Community Server" repository are already installed but they are not correct for this package`：MySQL 换过签名密钥，老的 mysql80-community-release 里只有旧 key。
+- `file /usr/obd/plugins/oceanbase-ce-libs from install of ob-deploy-4.7.0 conflicts with file from package ob-deploy-2.10.1`：OceanBase 源的新版包自己和旧版冲突。
+- 处理：mysql-community-* 先按下一条 swap 掉（客户端到 EL10 再装发行版的 `mysql8.4`）；用不上的第三方源挪到 `/etc/yum.repos.d/disabled-for-upgrade/` 后重跑 `prep-el7.sh update`。看 `yum7update.log` 里 `Transaction check error` / `GPG` 附近的行。
+
+**★ 运行了几年没重启的机器：先在 EL7 上重启一次再开始 leapp**（两台 861 / 1529 天没重启的测试机，重启后暴露的全是"升级前就存在"的问题）
+- `restart=no` 的容器（node_exporter）开机不会起来 → `docker update --restart=always`（survey 报 HIGH）。
+- 开机自启但早就起不来的服务：KingbaseES `License file expired`、CDM 实例服务——平时没人发现，因为一直没重启。写进报告交给业务方，不算升级引起。
+- 数据库手工启动、其实有现成的 unit（达梦 `DmServiceDMTEST.service` 是 enabled，但 dmserver 是 2025 年手工起的）：用官方脚本 `DmServiceXXX stop` 停掉再 `systemctl start`，确认 unit 能用，开机就会自己起来，不必生成新 unit。
+- 把这些和升级问题分开，后面每一跳的 verify 才有意义。
 
 **★ 卸载 `mysql-community-libs-compat` 会连带删掉 postfix**
 - 原因：它替换了 `mariadb-libs` 提供的 libmysqlclient.so.18，postfix 依赖它。
@@ -124,6 +137,7 @@
 | `Packages not signed by Red Hat`（hostguard、kubectl、自编译包…） | 不是阻断；但升级后这些包保持 EL7 版本，逐个确认还能用 |
 | `Difference in Python versions` / `GRUB2 core will be updated` | 提示，无需处理 |
 | /var 空间不足 | leapp 需要约 3~5GB；清 docker 无用镜像（先确认）、日志、yum 缓存 |
+| ★ preupgrade 0 阻断，`leapp upgrade` 却在 `dnf_package_download` 失败：`Transaction test error: file /usr/lib64/libwebp.so.7 from install of libwebp-1.0.0 conflicts with file from package libwebp7-1.0.3-2.el7.remi`（还有 libzip5） | 宿主机 PHP 早已迁走（容器化），Remi 的兼容库（libwebp7/libzip5/libicu69/oniguruma5php/gd3php/ImageMagick6-libs）留着没人用，和 EL8 的同名 so 冲突。preupgrade 的事务检查查不出来，下载完才报。确认没有非 Remi 包依赖后删除（`prep-el7.sh inhibitors` 第 5 步自动做；宿主机还有 Remi 的 php 时不动） |
 
 **★ 最严重：升级重启后进 initramfs 紧急模式，`upgrade.service failed`，日志 `dnf_upgrade_transaction ... python2-pyyaml install failed: cpio: File from package already exists as a directory`**
 - 原因：pip 装的 PyYAML（`/usr/lib64/python2.7/site-packages/yaml`、`PyYAML-3.12-py2.7.egg-info`）和 rpm 冲突。只有这一个包失败，但 DNF 返回非 0 → leapp 后续阶段（清理、post 动作）全部没跑。系统其实已经大部分是 EL8 了。
@@ -143,6 +157,8 @@
 | python2 | EL9 没有 python2。确认无人依赖后移除（hop.sh prep 会检查依赖）；有依赖的脚本先改 python3 |
 | ★ `Network configuration for unsupported device types`：`ifcfg-eth0.bak` | 手工留下的备份副本也被当成配置。`hop.sh answer` 在 migrate 前把 `ifcfg-*.bak/.orig/.old/~` 挪到工具目录 |
 | ★★ 重启进升级环境几秒就 `Entering emergency mode`，VNC 里敲命令没反应 | fstab 里有 bind 到 /sys 的条目（阿里云 `set_ecs_special.sh` 的 `eth0-speed.mock`）。leapp 把 fstab 固化成升级 initramfs 的 mount unit，挂不上就进 emergency，shell 在 ttyS0。`hop.sh up` 现在自动注释（EL10 post 恢复）；已经中招见 recovery.md B2 |
+| ★ `Detected RPMs with RSA/SHA1 signature`（rh-ruby23-*、rh-php72-*、devtoolset-*、llvm-toolset-*） | EL7 的 SCL 包（装在 /opt/rh）7→8 时 leapp 不处理、原样留下，EL9 不接受 SHA1 签名。确认没有进程/脚本在用 /opt/rh 后删除；`hop.sh post`（到 EL8 时）自动删。第三方工具包（如 OceanBase 的 `ob-deploy`，自带 PyInstaller 二进制）想保留文件的话：`rpm -ql` 存一份文件清单、备份 /var/lib/rpm，然后 `rpm -e --justdb --nodeps <包>`（只从 rpm 库去掉，文件不动、命令照常可用）。到 EL9 后再 `rpm -e gpg-pubkey-<SHA1 key>`，否则每次 rpm 操作都报 `Signature not supported. Hash algorithm SHA1 not available` |
+| ★ 自编译程序（静态重编的 nginx、源码编译的 mysqld 5.7）在 EL9 上起不来：`libcrypt.so.1: cannot open shared object file` | EL9 起 libxcrypt 只提供 libcrypt.so.2，so.1 在 `libxcrypt-compat` 里且默认不装。`hop.sh prep`（目标 ≥9）扫描运行中的非 rpm 程序，需要时把 libxcrypt-compat 写进 `/etc/leapp/transaction/to_install`，升级事务里一起装上，重启后直接能起来 |
 | ★ 宿主机 docker 容器正常但 Yearning 无限重启：`open /sys/fs/cgroup/memory/memory.limit_in_bytes: no such file` | EL9 起默认 cgroup v2。见 app-compat.md "cgroup v2" |
 
 ## 5. 9 → 10
@@ -162,6 +178,12 @@
 - 原因：重启后 SSH 一恢复，就马上执行了清理（删除 leapp 包和 /etc/leapp），而 leapp 的 FirstBoot 阶段（`leapp_resume.service`，含 removeleftoverpackages 等）还在跑，被删掉了自己的模块。
 - 处理：`hop.sh post` 现在会先等 `leapp_resume.service` 结束（最多 30 分钟）再清理；它失败时会打印日志并继续清理残留包和内核，最后删掉这个临时 unit。
 - 教训：SSH 能连上 ≠ 升级流程已经结束。
+
+**★ 7→8 后 verify 报一批 HTTPS 站点 `200 → 000`，但 nginx 正常、浏览器也能打开**
+- 原因：EL8 的 curl 默认协商 HTTP/2，nghttp2 对非法响应头直接 `PROTOCOL_ERROR`；这些站点配置里写了 `add_header 'Access-Control-Allow-Credentials:' 'true'`（头名带冒号）。EL7 的 curl 7.29 不走 h2，所以基线是 200。
+- 处理：`state.sh` 的探测固定 `--http1.1`，前后可比。头名带冒号是业务配置的老问题（严格的 HTTP/2 客户端会失败），列出文件交给业务方修。
+
+**★ 基线里一个容器都没有（Docker 19.03）**：`docker ps --format '{{.State}}'` 是 20.10 才有的字段，19.03 报模板错误、不输出 → `state.sh` 已改为失败时用 `{{.Status}}` 推出状态。旧基线要补：重新跑 state.sh，把 `ctr` 行追加进 baseline.tsv。
 
 **dbus.service 在 EL9 上"没有运行"** → 被 `dbus-broker.service` 取代，属于预期（verify.sh 已映射）。
 **sssd / smartd / vdo / rngd-wake-threshold "没有运行"** → 新版本 unit 带启动条件，没有配置就跳过（verify.sh 会识别 `ConditionResult=no`）。

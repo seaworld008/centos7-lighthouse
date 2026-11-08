@@ -74,6 +74,9 @@ rpm -qa | grep -qiE "^(php[0-9]*w|php7[0-9]w|php5[0-9]w)-" && flag HIGH "PHP 来
 rpm -qa | grep -qE "^mysql-community-libs" && flag HIGH "mysql-community-libs(-compat) 替换了 mariadb-libs：用 yum swap 换回 mariadb-libs，否则删它会连带删 postfix"
 [ -e /etc/ld.so.conf.d/mysql-x86_64.conf ] && flag MEDIUM "自定义 ld.so.conf.d/mysql-x86_64.conf（leapp 会告警）"
 rpm -qa | grep -qE "^(webtatic|ius|nginx-release|mysql[0-9]*-community-release|remi-release|elrepo-release)" && flag MEDIUM "存在第三方 *-release 源包，7→8 前卸载，EL10 后按需重新加"
+REMI_ALL=$(rpm -qa --qf '%{NAME}|%{VENDOR}\n' 2>/dev/null | awk -F'|' 'tolower($2) ~ /remi/ {print $1}')
+REMI_LIBS=$(echo "$REMI_ALL" | grep -vE '^(php|remi-release)' | tr '\n' ' ' | sed 's/ *$//')
+[ -n "$REMI_LIBS" ] && [ "$MAJOR" = 7 ] && ! echo "$REMI_ALL" | grep -qE '^php' && flag MEDIUM "残留 Remi 兼容库（${REMI_LIBS}）而宿主机已没有 Remi PHP：7→8 会在 dnf_package_download 和 EL8 的 libwebp/libzip 文件冲突（preupgrade 查不出来）。prep-el7.sh inhibitors 会删除"
 rpm -qa | grep -qE "^(python2-|python-)" && [ "$MAJOR" = 8 ] && flag INFO "EL8 仍有 python2 包；EL9 起没有 python2"
 
 sec OPENSSH
@@ -163,16 +166,22 @@ for pid in $(ls /proc | grep -E '^[0-9]+$'); do readlink /proc/$pid/exe 2>/dev/n
   case "$exe" in /var/lib/docker/*|/var/lib/containerd/*|/proc/*) continue;; esac
   libs=$(ldd "$exe" 2>/dev/null | grep -oE "(libssl\.so\.10|libcrypto\.so\.10|libssl\.so\.1\.0[^ ]*|libpcre\.so\.1|libpython2[^ ]*|libmysqlclient\.so\.18|libboost[^ ]*\.so\.1\.53[^ ]*|libicu[^ ]*\.so\.50|libffi\.so\.6|libreadline\.so\.6|libnsl\.so\.1|not found)" | sort -u | tr '\n' ' ')
   echo "$exe  ${libs:+[EL7-libs: $libs]}"
+  [ "$MAJOR" -le 8 ] && ldd "$exe" 2>/dev/null | grep -q 'libcrypt\.so\.1 ' && echo "$exe" >> /tmp/.survey_libcrypt1
   [ -n "$libs" ] && echo "$exe|$libs" >> /tmp/.survey_custom_bins
 done
 if [ -s /tmp/.survey_custom_bins ]; then
   while IFS='|' read -r e l; do flag HIGH "自编译程序 $e 依赖 EL7 库（$l）：升级后会起不来。方案：静态编译（nginx-static-build.sh）或改用新系统官方包"; done < /tmp/.survey_custom_bins
   rm -f /tmp/.survey_custom_bins
 fi
+if [ -s /tmp/.survey_libcrypt1 ]; then
+  flag INFO "非 rpm 程序依赖 libcrypt.so.1（$(sort -u /tmp/.survey_libcrypt1 | tr '\n' ' ')）：EL9 起在 libxcrypt-compat 里，hop.sh prep 会让 leapp 一起装上"
+  rm -f /tmp/.survey_libcrypt1
+fi
 for n in $(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | sort -u); do
   [ -x "$n" ] || { echo "--- $n: 在容器里运行（宿主机无此文件），见 DOCKER 段"; continue; }
   echo "--- $n -V:"; $n -V 2>&1
   $n -T 2>/dev/null | grep -nE "^\s*ssl\s+on;" | head -3 | grep -q . && flag MEDIUM "nginx 配置用了 'ssl on;'：nginx ≥1.25.1 已删除，迁移到新版时改成 'listen 443 ssl;'"
+  $n -T 2>/dev/null | grep -qE "^\s*add_header\s+['\"]?[A-Za-z0-9-]+:['\"]?\s" && flag INFO "nginx 有 add_header 的头名带冒号（如 'Access-Control-Allow-Credentials:'）：HTTP/2 客户端（EL8+ 的 curl、部分浏览器）会 PROTOCOL_ERROR；升级前就存在，告诉业务方"
   echo "--- server_name:"; $n -T 2>/dev/null | grep -E "^\s*server_name" | sort -u
 done
 pgrep -a httpd 2>/dev/null | head -2

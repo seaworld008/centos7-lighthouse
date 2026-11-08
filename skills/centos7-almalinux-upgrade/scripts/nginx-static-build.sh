@@ -7,7 +7,10 @@
 set -e
 export LC_ALL=C
 NG=${1:?用法: nginx-static-build.sh /path/to/nginx [--install]}
-OPENSSL=openssl-1.1.1w; OPENSSL_SHA=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+# 原二进制已是 OpenSSL 3.x 编译的，不要降回 1.1.1：NGX_OPENSSL=openssl-3.5.9 NGX_OPENSSL_SHA256=<官方 .sha256> bash nginx-static-build.sh ...
+OPENSSL=${NGX_OPENSSL:-openssl-1.1.1w}; OPENSSL_SHA=${NGX_OPENSSL_SHA256:-cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8}
+[ "$OPENSSL" != openssl-1.1.1w ] && [ -z "${NGX_OPENSSL_SHA256:-}" ] && { echo "!! 指定 NGX_OPENSSL 时必须同时给 NGX_OPENSSL_SHA256"; exit 1; }
+case "$OPENSSL" in openssl-1.1.1*) OPENSSL_TAG=OpenSSL_$(echo "${OPENSSL#openssl-}" | tr . _);; *) OPENSSL_TAG=$OPENSSL;; esac
 PCRE=pcre-8.45;         PCRE_SHA=4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09
 VER=$($NG -v 2>&1 | grep -oE "nginx/[0-9.]+" | cut -d/ -f2)
 ARGS=$($NG -V 2>&1 | sed -n 's/^configure arguments: //p')
@@ -17,12 +20,13 @@ ARGS=$(echo "$ARGS" | sed -E 's/--with-(openssl|pcre|zlib)=[^ ]*//g; s/--with-pc
 echo "nginx $VER  configure: $ARGS"
 command -v dnf >/dev/null && P=dnf || P=yum
 $P -y install gcc make zlib-devel perl tar gzip curl gnupg2 >/dev/null 2>&1 || true
+$P -y install perl-IPC-Cmd perl-Data-Dumper perl-Time-Piece >/dev/null 2>&1 || true   # OpenSSL 3.x 的 Configure 需要
 [ "$(rpm -E %rhel)" -ge 8 ] && $P -y install perl-core >/dev/null 2>&1 || true
 W=/usr/local/src/nginx-static; mkdir -p $W; cd $W
 get() { [ -s "$2" ] || curl -fsSL -m 300 -o "$2" "$1"; }
 get https://nginx.org/download/nginx-$VER.tar.gz nginx-$VER.tar.gz
 get https://nginx.org/download/nginx-$VER.tar.gz.asc nginx-$VER.tar.gz.asc
-get https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/$OPENSSL.tar.gz $OPENSSL.tar.gz
+get https://github.com/openssl/openssl/releases/download/$OPENSSL_TAG/$OPENSSL.tar.gz $OPENSSL.tar.gz
 get https://sourceforge.net/projects/pcre/files/pcre/8.45/$PCRE.tar.gz/download $PCRE.tar.gz
 INSTALL=$2   # 下面不要再用 $1/$2
 while read -r sum file; do

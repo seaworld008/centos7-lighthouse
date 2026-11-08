@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+两台运行了 861 / 1529 天、很复杂的 PHP + 中间件测试机（阿里云）：CentOS 7.6 / 7.9 → AlmaLinux 10.2，约 3.3 小时，期间修了 8 处脚本问题。见 [实战报告](field-reports/2026-11-08-aliyun-php-middleware-x2.md)。
+
+### Added（均为 `verified-on-real-run`）
+- `hop.sh prep`（目标 ≥9）：运行中的非 rpm 程序依赖 `libcrypt.so.1`（静态重编的 nginx、源码编译的 mysqld 5.7）时，把 `libxcrypt-compat` 写进 `/etc/leapp/transaction/to_install`，升级重启后直接能起来
+- `hop.sh post`（到 EL8 时）：删除 EL7 的 SCL 残留（rh-*/devtoolset-*/llvm-toolset-*），否则 8→9 报 `Detected RPMs with RSA/SHA1 signature`；有进程在用 /opt/rh 时不删
+- `prep-el7.sh inhibitors` 第 5 步：宿主机已没有 Remi PHP 时，删除孤立的 Remi 兼容库（libwebp7/libzip5/libicu69…），否则 7→8 在 `dnf_package_download` 文件冲突（preupgrade 查不出来）
+- `nginx-static-build.sh`：`NGX_OPENSSL` / `NGX_OPENSSL_SHA256` 指定 OpenSSL 版本（原二进制已是 OpenSSL 3.x 时不降回 1.1.1）；装 OpenSSL 3 Configure 需要的 perl 模块
+- `survey.sh`：残留 Remi 兼容库 → MEDIUM；非 rpm 程序依赖 libcrypt.so.1 → INFO；nginx `add_header` 头名带冒号（HTTP/2 客户端会 PROTOCOL_ERROR）→ INFO
+- `pitfalls.md`：第三方源让 `yum update` 整个失败（MySQL 换签名密钥、ob-deploy 自冲突）；长期不重启的机器先在 EL7 重启一次；SHA1 签名第三方包用 `rpm -e --justdb` 保留文件
+
+### Fixed（均为 `verified-on-real-run`）
+- ★ `state.sh`：Docker < 20.10 的 `docker ps --format` 没有 `{{.State}}`，基线里一个容器都没记 → 失败时改用 `{{.Status}}` 推出状态
+- `state.sh`：HTTP 探测固定 `--http1.1`。EL8+ 的 curl 默认走 h2，遇到非法响应头直接 000，与 EL7 基线不可比（误报 9 个站点）
+
 ## [0.4.0] - 2026-11-07
 
 第一次 Kubernetes 集群原地升级：阿里云 kubeadm 1.21 测试集群 3 master + 3 worker，CentOS 7 → AlmaLinux 10.2，**K8s 版本不变**（dockershim + Docker 29 + cgroup v2 实测可用）。见 [实战报告](field-reports/2026-11-07-aliyun-k8s-1.21-3m3w.md)。

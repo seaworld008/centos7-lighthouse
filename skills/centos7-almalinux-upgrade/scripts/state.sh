@@ -23,7 +23,10 @@ ss -tlnu 2>/dev/null | tail -n +2 | awk -v e="$EPH" '{split($5,a,":"); p=a[lengt
 
 if command -v docker >/dev/null 2>&1; then
   # k8s_ 开头的是 kubelet 管理的 pod 容器（名字带 pod hash 和重启次数，重启后必然变化）→ 不进基线，用 k8s.sh pods 在集群层面对比
-  docker ps -a --format '{{.Names}}\t{{.State}}' 2>/dev/null | grep -v '^k8s_' | sort | sed 's/^/ctr\t/'
+  # Docker < 20.10 的 docker ps --format 没有 {{.State}}（报模板错误、不输出任何行）→ 用 {{.Status}} 推出状态
+  { docker ps -a --format '{{.Names}}\t{{.State}}' 2>/dev/null || docker ps -a --format '{{.Names}}\t{{.Status}}' 2>/dev/null \
+      | awk -F'\t' '{s=$2; if (s ~ /^Up/) s=(s ~ /Paused/ ? "paused" : "running"); else if (s ~ /^Exited/) s="exited"; else if (s ~ /^Created/) s="created"; else if (s ~ /^Restarting/) s="restarting"; else if (s ~ /^Dead/) s="dead"; else if (s ~ /^Removal/) s="removing"; print $1 "\t" s}'; } \
+    | grep -v '^k8s_' | sort | sed 's/^/ctr\t/'
 fi
 
 # nginx 虚拟主机探测：宿主机 nginx + 容器里的 nginx/openresty/tengine（docker-proxy 映射到本机 80/443）
@@ -43,7 +46,8 @@ NG=$(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | he
   | grep -vE "^(_|localhost|\*.*|~.*|)$" | sort -u | while read -r h; do
     for sch in https http; do
       port=443; [ $sch = http ] && port=80
-      code=$(curl -sk -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
+      # 固定 --http1.1：EL7 的 curl 不走 h2，EL8+ 的 curl 默认协商 h2，且对非法响应头（如 add_header "X-Foo:" 带冒号）直接报 PROTOCOL_ERROR → 000，基线前后不可比
+      code=$(curl -sk --http1.1 -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
       printf "http\t%s://%s/\t%s\n" "$sch" "$h" "${code:-000}"
     done
   done
@@ -53,7 +57,7 @@ ss -tln 2>/dev/null | tail -n +2 | awk -v e="$EPH" '{split($4,a,":"); p=a[length
   case "$p" in 22|25|111|323|10050) continue;; esac
   echo " $SSHP " | grep -q " $p " && continue
   sch=http; [ "$p" = 443 ] || [ "$p" = 8443 ] && sch=https
-  code=$(curl -sk -o /dev/null -m 4 -w '%{http_code}' "$sch://127.0.0.1:$p/" 2>/dev/null)
+  code=$(curl -sk --http1.1 -o /dev/null -m 4 -w '%{http_code}' "$sch://127.0.0.1:$p/" 2>/dev/null)
   printf "http\t%s://127.0.0.1:%s/\t%s\n" "$sch" "$p" "${code:-000}"
 done
 
