@@ -81,6 +81,19 @@ prep)
   rewrite_mirrors "$M" /etc/leapp/files/leapp_upgrade_repositories.repo /etc/leapp/files/vendors.d/*.repo
   disable_noise_sections /etc/leapp/files/vendors.d/*.repo
   pipfix
+  # EL9 起 libcrypt.so.1 拆到 libxcrypt-compat（默认不装）：自编译 nginx/mysqld 等依赖它，升级后开机起不来（真实踩坑）
+  # → 让 leapp 在升级事务里一起装上（/etc/leapp/transaction/to_install）
+  if [ "$TGT" -ge 9 ]; then
+    need=""
+    for e in $(ls -l /proc/[0-9]*/exe 2>/dev/null | awk '{print $NF}' | grep '^/' | sort -u); do
+      [ -f "$e" ] || continue; rpm -qf "$e" >/dev/null 2>&1 && continue
+      ldd "$e" 2>/dev/null | grep -q 'libcrypt\.so\.1 ' && need="$need $e"
+    done
+    if [ -n "$need" ]; then
+      mkdir -p /etc/leapp/transaction; grep -qx libxcrypt-compat /etc/leapp/transaction/to_install 2>/dev/null || echo libxcrypt-compat >> /etc/leapp/transaction/to_install
+      echo "这些非 rpm 程序依赖 libcrypt.so.1，已把 libxcrypt-compat 加入 leapp 安装列表:$need"
+    fi
+  fi
   echo "== 探测目标源（\$releasever=$TGT）:"
   bad=0
   # 厂商源只探测本机在用的：leapp 按 <vendor>.sigs 里的签名 key 与已安装包的签名匹配来启用厂商源（PES 可能是空的，如 docker-ce）
@@ -267,6 +280,13 @@ post)
   tail -3 $K/dnfup-el$CUR.log
   left=$(rpm -qa | grep -E "\.el${PREV}(_[0-9]+)?\." | grep -v gpg-pubkey)
   echo "== 残留 el$PREV 包: $(echo $left | wc -w)"; echo "$left" | head -30
+  # EL7 的 SCL（rh-ruby23/rh-php72/devtoolset/llvm-toolset，装在 /opt/rh）leapp 不处理，是 RSA/SHA1 签名 → 8→9 阻断
+  # "Detected RPMs with RSA/SHA1 signature"。没有进程在用 /opt/rh 时直接删
+  scl=$(rpm -qa --qf '%{NAME} %{RELEASE}\n' | awk '$2 ~ /el7/ && $1 ~ /^(rh-|devtoolset-|llvm-toolset-|centos-release-scl)/ {print $1}')
+  if [ -n "$scl" ] && [ "$CUR" = 8 ]; then
+    if ls -l /proc/[0-9]*/exe 2>/dev/null | grep -q ' /opt/rh/'; then echo "!! 有进程在用 /opt/rh 下的 SCL，没有删除: $(echo $scl)"
+    else echo "删除 EL7 SCL 残留（8→9 的 SHA1 签名阻断项）: $(echo $scl | wc -w) 个"; $PKG -y remove $scl 2>&1 | tail -1; fi
+  fi
   # 阿里云等老镜像的 cloud-init 是源码安装的（不属于 rpm），依赖旧 python，升级后每跳都 failed：禁用并挪走这些 unit
   if ! rpm -q cloud-init >/dev/null 2>&1; then
     for u in cloud-init-local cloud-init cloud-config cloud-final; do
