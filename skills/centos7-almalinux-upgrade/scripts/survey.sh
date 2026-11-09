@@ -78,6 +78,8 @@ REMI_ALL=$(rpm -qa --qf '%{NAME}|%{VENDOR}\n' 2>/dev/null | awk -F'|' 'tolower($
 REMI_LIBS=$(echo "$REMI_ALL" | grep -vE '^(php|remi-release)' | tr '\n' ' ' | sed 's/ *$//')
 [ -n "$REMI_LIBS" ] && [ "$MAJOR" = 7 ] && ! echo "$REMI_ALL" | grep -qE '^php' && flag MEDIUM "残留 Remi 兼容库（${REMI_LIBS}）而宿主机已没有 Remi PHP：7→8 会在 dnf_package_download 和 EL8 的 libwebp/libzip 文件冲突（preupgrade 查不出来）。prep-el7.sh inhibitors 会删除"
 rpm -qa | grep -qE "^(python2-|python-)" && [ "$MAJOR" = 8 ] && flag INFO "EL8 仍有 python2 包；EL9 起没有 python2"
+HN=$(tr -d '[:space:]' < /etc/hostname 2>/dev/null); [ -z "$HN" ] && HN=$(hostname)
+echo "$HN" | grep -q '[^A-Za-z0-9.-]' && flag MEDIUM "主机名 '$HN' 含下划线等非法字符：EL9 起 systemd 开机时会把这些字符去掉（实测 app_01 → app01），用 \$hostname 拼 ident 的监控 agent（categraf 等）会换成新目标、旧目标告警失联。升级后在 agent 配置里写死旧 ident，或改成合法主机名（见 pitfalls.md 8→9）"
 
 sec OPENSSH
 rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} vendor=%{VENDOR} sig=%{SIGPGP:pgpsig}\n' openssh-server 2>/dev/null

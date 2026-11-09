@@ -115,6 +115,13 @@ operator: agent
 - 处理：确认 A/B 机中间件端口都可达；观察 5 分钟无新增重启、日志无连接错误。
 - 预防：升级依赖方的中间件机器前告诉 K8s 业务方，或升级完统一 `kubectl rollout restart`。
 
+### 4.11 监控目标失联（次日发现）
+- 阶段：8→9（次日告警才发现）
+- 现象：夜莺一直报 categraf `target_miss`（"Lost connection with monitoring target"），从 8→9 重启那一刻开始，持续 11 小时；categraf 进程一直正常运行、心跳没有报错。
+- 原因：两台的主机名带下划线（形如 `app_01`）。`/etc/hostname` 没变，但 EL9 起 systemd 开机时会去掉非法字符（`app_01` → `app01`）；journal 显示 EL8 最后一次开机时还是旧名字，EL9 第一次开机就变了。categraf 配置 `hostname = "$ip-$hostname"`，ident 跟着变：平台上多出新目标，旧目标失联。
+- 处理：categraf 配置里写死旧 ident（`hostname = "$ip-app_01"`），重启 categraf，`categraf -test` 确认 `agent_hostname` 恢复旧值；平台上多出的新目标由用户删除。
+- 状态：promoted → `survey.sh`（主机名含非法字符 → MEDIUM）、`pitfalls.md` §4
+
 ## 5. 结果对比（verify.sh，最终重启后）
 | 检查项 | 升级前 | 升级后 | 备注 |
 |---|---|---|---|
@@ -139,4 +146,5 @@ operator: agent
 - B 机 13 个 vhost（含 .bak 文件）的 `add_header` 头名带冒号，HTTP/2 客户端会失败：建议业务方去掉冒号。
 - 宿主机 MySQL 客户端由 8.0.36（Oracle rpm）换成发行版 8.4.11（EL10 没有 8.0 的包；8.0 已停止维护），服务端 5.7.26 不变。
 - SysV 脚本（nginx、mysql、kingbased）在 AlmaLinux 10.2 上仍由 systemd-sysv-generator 启动；为防以后去掉，可用 `finalize.sh sysv-units` 包成原生 unit。
+- 监控平台上 EL9 起新出现的 `<ip>-<去掉下划线的主机名>` 目标需要用户删除（categraf 已改回旧 ident）。
 - 备份位置：两台的 `/data/os-upgrade-backup/20261108-1941`；nginx 旧二进制 `/usr/local/nginx/sbin/nginx.bak-el7-20261108`。
