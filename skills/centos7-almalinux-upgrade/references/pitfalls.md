@@ -160,6 +160,7 @@
 | ★ `Detected RPMs with RSA/SHA1 signature`（rh-ruby23-*、rh-php72-*、devtoolset-*、llvm-toolset-*） | EL7 的 SCL 包（装在 /opt/rh）7→8 时 leapp 不处理、原样留下，EL9 不接受 SHA1 签名。确认没有进程/脚本在用 /opt/rh 后删除；`hop.sh post`（到 EL8 时）自动删。第三方工具包（如 OceanBase 的 `ob-deploy`，自带 PyInstaller 二进制）想保留文件的话：`rpm -ql` 存一份文件清单、备份 /var/lib/rpm，然后 `rpm -e --justdb --nodeps <包>`（只从 rpm 库去掉，文件不动、命令照常可用）。到 EL9 后再 `rpm -e gpg-pubkey-<SHA1 key>`，否则每次 rpm 操作都报 `Signature not supported. Hash algorithm SHA1 not available` |
 | ★ 自编译程序（静态重编的 nginx、源码编译的 mysqld 5.7）在 EL9 上起不来：`libcrypt.so.1: cannot open shared object file` | EL9 起 libxcrypt 只提供 libcrypt.so.2，so.1 在 `libxcrypt-compat` 里且默认不装。`hop.sh prep`（目标 ≥9）扫描运行中的非 rpm 程序，需要时把 libxcrypt-compat 写进 `/etc/leapp/transaction/to_install`，升级事务里一起装上，重启后直接能起来 |
 | ★ 宿主机 docker 容器正常但 Yearning 无限重启：`open /sys/fs/cgroup/memory/memory.limit_in_bytes: no such file` | EL9 起默认 cgroup v2。见 app-compat.md "cgroup v2" |
+| ★ 升级后监控一直报"目标失联"（夜莺 `target_miss` 等），但 agent 明明在跑；`hostname` 从 `app_01` 变成 `app01` | `/etc/hostname` 没变，但 EL9 起的 systemd 开机时会把不合法的主机名字符（下划线等）去掉再设给内核。监控 agent 用 `$hostname` 拼 ident（如 categraf 的 `hostname = "$ip-$hostname"`），ident 就变了：监控平台里多出一个新目标，旧目标失联。实测从 EL9 第一次开机开始变。survey 会提示。处理（二选一，由用户决定）：在 agent 配置里写死升级前的 ident（categraf：`hostname = "$ip-app_01"`，然后重启 agent），再到监控平台删掉多出来的新目标；或者干脆把主机名改成合法名字，再到平台删掉旧目标。依赖主机名的其他东西也要看看（宿主机 MySQL 的 `<hostname>.err`/`.pid`、按主机名区分的日志采集等） |
 
 ## 5. 9 → 10
 

@@ -13,6 +13,7 @@
 - `prep-el7.sh inhibitors` 第 5 步：宿主机已没有 Remi PHP 时，删除孤立的 Remi 兼容库（libwebp7/libzip5/libicu69…），否则 7→8 在 `dnf_package_download` 文件冲突（preupgrade 查不出来）
 - `nginx-static-build.sh`：`NGX_OPENSSL` / `NGX_OPENSSL_SHA256` 指定 OpenSSL 版本（原二进制已是 OpenSSL 3.x 时不降回 1.1.1）；装 OpenSSL 3 Configure 需要的 perl 模块
 - `survey.sh`：残留 Remi 兼容库 → MEDIUM；非 rpm 程序依赖 libcrypt.so.1 → INFO；nginx `add_header` 头名带冒号（HTTP/2 客户端会 PROTOCOL_ERROR）→ INFO
+- `survey.sh`：主机名含下划线等非法字符 → MEDIUM（EL9 起 systemd 开机会去掉这些字符，用 `$hostname` 拼 ident 的监控 agent 会换成新目标、旧目标告警失联）；`pitfalls.md` §4 写了处理办法
 - `pitfalls.md`：第三方源让 `yum update` 整个失败（MySQL 换签名密钥、ob-deploy 自冲突）；长期不重启的机器先在 EL7 重启一次；SHA1 签名第三方包用 `rpm -e --justdb` 保留文件
 
 ### Fixed（均为 `verified-on-real-run`）
