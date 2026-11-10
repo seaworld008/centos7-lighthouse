@@ -80,6 +80,24 @@ REMI_LIBS=$(echo "$REMI_ALL" | grep -vE '^(php|remi-release)' | tr '\n' ' ' | se
 rpm -qa | grep -qE "^(python2-|python-)" && [ "$MAJOR" = 8 ] && flag INFO "EL8 仍有 python2 包；EL9 起没有 python2"
 HN=$(tr -d '[:space:]' < /etc/hostname 2>/dev/null); [ -z "$HN" ] && HN=$(hostname)
 echo "$HN" | grep -q '[^A-Za-z0-9.-]' && flag MEDIUM "主机名 '$HN' 含下划线等非法字符：EL9 起 systemd 开机时会把这些字符去掉（实测 app_01 → app01），用 \$hostname 拼 ident 的监控 agent（categraf 等）会换成新目标、旧目标告警失联。升级后在 agent 配置里写死旧 ident，或改成合法主机名（见 pitfalls.md 8→9）"
+# 不带版本号的 python shebang：EL8 起没有 /usr/bin/python，EL10 只有 python3 → 备份/巡检/日志轮转脚本静默失败
+PYSH=""; for f in /usr/local/bin/* /usr/local/sbin/* /root/script*/* /root/bin/*; do
+  [ -f "$f" ] || continue; head -1 "$f" 2>/dev/null | grep -qE '^#! *(/usr)?/bin/(env +)?python *$' && PYSH="$PYSH $f"
+done
+[ -n "$PYSH" ] && flag MEDIUM "脚本用不带版本的 python shebang（${PYSH# }）：EL8 起没有 /usr/bin/python，cron/logrotate/systemd 调用会 203/EXEC 或 command not found（真实案例：GitLab 每日备份、磁盘巡检、nginx 日志轮转脚本）。确认兼容 python3 后把首行改成 #!/usr/bin/python3"
+# 第三方 rpm 拥有的可执行文件被手工替换过：卸载/升级该包时会被删除或覆盖
+MODF=$(rpm -qa --qf '%{NAME}|%{VENDOR}\n' 2>/dev/null | awk -F'|' 'tolower($2) !~ /(centos|red hat|almalinux|rocky)/ {print $1}' | while read -r p; do
+  rpm -V --nomtime "$p" 2>/dev/null | awk '$1 ~ /5/ && $2 != "c" && $NF ~ /^\/(usr\/)?(local\/)?s?bin\//{print $NF}'; done | sort -u | tr '\n' ' ' | sed 's/ *$//')
+[ -n "$MODF" ] && flag MEDIUM "第三方 rpm 拥有的可执行文件被手工替换过（${MODF}）：卸载/升级该包时会被删除或覆盖（真实案例：/usr/bin/php 被换成调用 PHP 容器的包装脚本，卸载 remi php-cli 时一起被删）。先复制到 /usr/local/bin，卸载后再链接回来"
+if rpm -q jenkins >/dev/null 2>&1; then
+  JW=""; rpm -V jenkins 2>/dev/null | grep -q 'jenkins\.war$' && JW="（war 已被手工替换，rpm 版本不代表实际运行版本）"
+  flag INFO "Jenkins rpm $(rpm -q --qf '%{VERSION}' jenkins)${JW}：老包是 SysV 启动 + 老签名（2.2xx 的 DSA/SHA1 签名是 8→9 阻断项）。见 app-compat.md 的 Jenkins：先换原生 systemd unit（环境变量与现在一致），8→9 前 rpm -e --justdb --noscripts jenkins"
+fi
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  GL=$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | awk 'tolower($2) ~ /gitlab\/gitlab-(ce|ee)|gitlab-(ce|ee):/ {print $1}' | while read -r n; do
+    t=$(docker inspect -f '{{if .Config.StopTimeout}}{{.Config.StopTimeout}}{{end}}' "$n" 2>/dev/null); [ "${t:-0}" -lt 120 ] && echo "$n"; done | tr '\n' ' ')
+  [ -n "$GL" ] && flag MEDIUM "GitLab omnibus 容器 ${GL}没设 stop_grace_period：dockerd 重启/关机只给 10s 就 SIGKILL，内置 PostgreSQL 留下 .s.PGSQL.5432.lock，之后一直 502（真实踩坑）。compose 里加 stop_grace_period: 5m；hop.sh reboot/post 会先优雅停止它"
+fi
 
 sec OPENSSH
 rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} vendor=%{VENDOR} sig=%{SIGPGP:pgpsig}\n' openssh-server 2>/dev/null

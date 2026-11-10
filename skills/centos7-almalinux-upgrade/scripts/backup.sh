@@ -19,7 +19,10 @@ mkdir -p "$B" && cd "$B" || exit 1
 echo "备份到 $B"
 
 tar czf etc.tgz /etc 2>/dev/null
-tar czf root-home.tgz --exclude=/root/.cache --exclude='/root/*.hprof' --exclude='/root/*.tar.gz' --exclude=/root/os-upgrade-kit /root 2>/dev/null
+# 构建缓存可重新下载、快照里也有：CI/构建机上动辄几十 GB（真实案例：.m2 17G + .npm 16G），不打包
+tar czf root-home.tgz --exclude=/root/.cache --exclude='/root/*.hprof' --exclude='/root/*.tar.gz' --exclude=/root/os-upgrade-kit \
+  --exclude=/root/.m2/repository --exclude=/root/.npm --exclude=/root/.pnpm-store --exclude=/root/.npminstall_tarball \
+  --exclude=/root/.gradle/caches --exclude=/root/.yarn/cache --exclude=/root/go/pkg /root 2>/dev/null
 tar czf var-spool-cron.tgz /var/spool/cron 2>/dev/null
 # /opt /usr/local 以及运行中非 rpm 程序所在目录（限 2GB 以内的目录，避免把数据打进去）
 DIRS="/opt /usr/local"

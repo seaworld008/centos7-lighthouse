@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+CI 构建机（阿里云）：宿主机 Jenkins + GitLab omnibus 容器 + 共享 nginx 网关，CentOS 7.9 → AlmaLinux 10.2，约 2.3 小时。见 [实战报告](field-reports/2026-11-10-aliyun-jenkins-gitlab-ci.md)。
+
+### Added（`verified-on-real-run`）
+- `hop.sh`：`stop_stateful` / `start_stateful`。`hop.sh post` 在 dnf 事务前也优雅停止有状态容器（docker-ce 被升级时 dockerd 重启，容器只有 10s），结束后启动回来；有状态名单加入 gitlab/gitea/gogs/sonarqube/nexus/jira/confluence/harbor，等待时间 120s → 300s
+- `survey.sh`：不带版本号的 python shebang 运维脚本 → MEDIUM；第三方 rpm 拥有的可执行文件被手工替换 → MEDIUM；GitLab omnibus 容器没设 stop_grace_period → MEDIUM；Jenkins rpm（war 是否被替换、SHA1 签名）→ INFO
+- `app-compat.md`：Jenkins / CI 构建机、Node.js 多版本构建工具链、GitLab（omnibus 容器）三节
+- `pitfalls.md`：GitLab PostgreSQL 残留锁文件（§6）、python shebang 脚本（§7）、jenkins rpm DSA/SHA1（§4）、被替换的 rpm 文件随卸载消失（§2）
+
+### Fixed（`verified-on-real-run`）
+- ★ `state.sh`：`--http1.1` 在 EL7（curl 7.29 不支持）上让所有 HTTP 探测变成 000 → 先探测 curl 是否支持
+- `backup.sh`：打包 /root 时排除 .m2/.npm/.pnpm-store/.gradle/.yarn 等构建缓存（构建机上几十 GB）
+
 两台运行了 861 / 1529 天、很复杂的 PHP + 中间件测试机（阿里云）：CentOS 7.6 / 7.9 → AlmaLinux 10.2，约 3.3 小时，期间修了 8 处脚本问题。见 [实战报告](field-reports/2026-11-08-aliyun-php-middleware-x2.md)。
 
 ### Added（均为 `verified-on-real-run`）

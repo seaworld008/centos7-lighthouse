@@ -94,6 +94,18 @@
 - 原因：它替换了 `mariadb-libs` 提供的 libmysqlclient.so.18，postfix 依赖它。
 - 处理：`yum swap -- remove mysql-community-* -- install mariadb-libs`（`prep-el7.sh inhibitors` 已做）；宿主机若装了 mysql-community-server 则不要自动处理。
 
+**★ 第三方 rpm 拥有的可执行文件被手工替换过：卸载该包时一起被删**
+- 现象：`/usr/bin/php` 早就被换成"转发到 PHP 容器"的包装脚本（宿主机 PHP 改用容器后），但文件仍属于 remi 的 `php-cli`。按计划卸载 remi PHP 后 `/usr/bin/php` 消失，20 个 Jenkins 任务的 `php`/`composer` 会全部失败。leapp 删除无 EL8 包的第三方 rpm 时也一样。
+- 处理：卸载前 `cp -a /usr/bin/php /usr/local/bin/php`，卸载后 `ln -sf /usr/local/bin/php /usr/bin/php`（构建任务的 PATH 可能不含 /usr/local/bin，所以 /usr/bin 下要留链接）。survey 会列出这类文件（`rpm -V` 摘要变化的第三方包可执行文件）。
+
+**★ backup.sh 的基线里所有 HTTP 探测都是 000（EL7）**
+- 原因：`state.sh` 为了让 EL8+ 不走 h2 固定了 `curl --http1.1`，而 EL7 的 curl 7.29 不认识这个参数（7.33 起才有），整条命令报错。
+- 处理：已修，先探测 curl 是否支持再加。基线里 http 行全是 000 就说明探测本身坏了，不要拿它对比。
+
+**★ backup.sh 打包 /root 花了十几分钟（构建机）**
+- 原因：CI/构建机的 /root 里有 `.m2`（17G）、`.npm`（16G）等构建缓存。
+- 处理：已默认排除 `.m2/repository`、`.npm`、`.pnpm-store`、`.gradle/caches`、`.yarn/cache` 等（可重新下载，快照里也有）。
+
 ## 2b. 源系统是 CentOS Linux 8 / Stream 8
 
 **★ 资产表写的是"CentOS 7"，实际上是 CentOS 8.3**
@@ -161,6 +173,7 @@
 | ★ 自编译程序（静态重编的 nginx、源码编译的 mysqld 5.7）在 EL9 上起不来：`libcrypt.so.1: cannot open shared object file` | EL9 起 libxcrypt 只提供 libcrypt.so.2，so.1 在 `libxcrypt-compat` 里且默认不装。`hop.sh prep`（目标 ≥9）扫描运行中的非 rpm 程序，需要时把 libxcrypt-compat 写进 `/etc/leapp/transaction/to_install`，升级事务里一起装上，重启后直接能起来 |
 | ★ 宿主机 docker 容器正常但 Yearning 无限重启：`open /sys/fs/cgroup/memory/memory.limit_in_bytes: no such file` | EL9 起默认 cgroup v2。见 app-compat.md "cgroup v2" |
 | ★ 升级后监控一直报"目标失联"（夜莺 `target_miss` 等），但 agent 明明在跑；`hostname` 从 `app_01` 变成 `app01` | `/etc/hostname` 没变，但 EL9 起的 systemd 开机时会把不合法的主机名字符（下划线等）去掉再设给内核。监控 agent 用 `$hostname` 拼 ident（如 categraf 的 `hostname = "$ip-$hostname"`），ident 就变了：监控平台里多出一个新目标，旧目标失联。实测从 EL9 第一次开机开始变。survey 会提示。处理（二选一，由用户决定）：在 agent 配置里写死升级前的 ident（categraf：`hostname = "$ip-app_01"`，然后重启 agent），再到监控平台删掉多出来的新目标；或者干脆把主机名改成合法名字，再到平台删掉旧目标。依赖主机名的其他东西也要看看（宿主机 MySQL 的 `<hostname>.err`/`.pid`、按主机名区分的日志采集等） |
+| ★ `Detected RPMs with RSA/SHA1 signature`：`jenkins`（DSA/SHA1，2019 年的 2.204.x rpm） | 老 Jenkins rpm 的签名 EL9 不接受。实际运行的 war 常常早被手工替换（rpm 2.204.1、war 2.346.1），启动也已换成自己的 systemd unit（见 app-compat.md Jenkins）。此时 rpm 只是一条记录：`rpm -ql jenkins` / `rpm -q --scripts jenkins` 存档后 `rpm -e --justdb --noscripts --nodeps jenkins`——**不删文件、不跑卸载脚本**（war、JENKINS_HOME、jenkins 用户都保留）。还在用 rpm 的 SysV 脚本启动的话，先换 unit 再做 |
 
 ## 5. 9 → 10
 
@@ -217,6 +230,12 @@
 
 **云厂商 SysV 插件**（华为 hostguard/ICAgent/CloudResetPwd…）：AlmaLinux 10.2 仍保留 systemd-sysv-generator，实测能正常启动；为防以后去掉，可 `finalize.sh sysv-units` 包成原生 unit。升级前就坏的插件（如 cloudResetPwdAgent）在报告里注明"非本次引起"。
 
+**★★ GitLab（omnibus 容器）一直 502：内置 PostgreSQL 反复 `lock file "/var/opt/gitlab/postgresql/.s.PGSQL.5432.lock" already exists`**
+- 现象：7→8 重启后 GitLab 正常起来，`hop.sh post` 跑完却变成 502；`gitlab-ctl status` 里 postgresql 每秒重启一次，日志提示 `Is another postmaster (PID 375) using socket file`，但 `ps -p 375` 查不到。
+- 原因：`hop.sh post` 的 dnf 事务升级了 docker-ce/containerd → dockerd 重启，**容器默认只给 10 秒就 SIGKILL**，GitLab 的 PostgreSQL 没关完，锁文件留在持久化目录里。新容器里 PID 375 恰好是别的进程的**线程**（`ps -p` 不列线程，但 `kill(pid,0)` 成功），PostgreSQL 就认为还有另一个实例在跑。
+- 处理：确认容器里没有 postgres 主进程后，`gitlab-ctl stop postgresql`，把 `.s.PGSQL.5432.lock` 挪走、删掉 `.s.PGSQL.5432`，`gitlab-ctl start postgresql`。PostgreSQL 会自动做崩溃恢复（实测 `redo is not required`），`/-/readiness?all=1` 全部 ok 即可。
+- 预防：compose 里给 GitLab 加 `stop_grace_period: 5m`；`hop.sh reboot` 和 `hop.sh post` 现在会先优雅停止有状态容器（GitLab/Gitea/Nexus/SonarQube 等已加入名单，最长等 300s），post 结束再启动回来；survey 对没设 stop_grace_period 的 GitLab 容器报 MEDIUM。
+
 ## 7. 升级后应用层
 
 **★ 自编译 nginx：`libssl.so.10: cannot open shared object file`**
@@ -248,6 +267,11 @@
 - 处理：nacos 就绪后 `docker restart` 这些容器；长期方案：容器的启动脚本在注册失败时退出（让 restart 策略生效），或给容器加对 nacos 的等待。这不是升级引起的，任何一次重启都会发生。
 
 **★ Kubernetes 节点**：见 `kubernetes.md`（pod 里老 JDK 在 cgroup v2 下 OOMKilled、Dead 容器导致 kubelet 起不来、NFS PVC 阻断 leapp、启动风暴等）。
+
+**★ 运维脚本静默失败：首行是 `#!/usr/bin/python` / `#!/bin/python`**
+- 现象：升级到 EL8 后 `jenkins-systemd-watch.service` 每分钟 203/EXEC；同目录下 GitLab 每日备份、磁盘巡检、nginx 日志轮转（logrotate postrotate）脚本用的也是不带版本的 python，cron 里不会有人看见报错——当晚的 GitLab 备份就会失败。
+- 原因：EL8 起没有不带版本号的 `/usr/bin/python`，EL10 只有 python3.12。
+- 处理：先 `python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" <脚本>` 确认语法兼容（写成 2/3 兼容的脚本一般直接能用），把首行改成 `#!/usr/bin/python3`，能 dry-run 的跑一次（如 `--check-current`）。survey 会扫描 /usr/local/{bin,sbin}、/root/script* 并报 MEDIUM。
 
 **★ 证书即将过期**：迁移 nginx 时顺手 `openssl x509 -noout -enddate` 检查，写进报告。
 
