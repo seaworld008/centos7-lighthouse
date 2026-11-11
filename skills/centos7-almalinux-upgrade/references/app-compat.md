@@ -94,6 +94,11 @@
 - rpm 版 mariadb/postgresql 每跳都会大版本升级：MariaDB 5.5→10.3→10.5→10.11 每跳后跑 `mysql_upgrade`/`mariadb-upgrade`；PostgreSQL 9.2→10→13→16 每跳都要 `pg_upgrade`（或最稳：升级前 `pg_dumpall`，升级后新建实例导入）。
 - 数据量大/关键库：建议迁出到云数据库或新机器，不要原地连跳。
 - 容器里的数据库不受影响，重启前优雅停止即可。
+- 宿主机 tarball 版 MySQL 5.7（mysqld_safe + SysV）在 EL10 上能跑（要 EPEL 的 libxcrypt-compat、ncurses-compat-libs），但要补两件事（真实踩坑：每晚备份时内存超限被杀，停了 10 小时）：
+  - unit 的 drop-in 加 `OOMPolicy=continue` + `Restart=on-failure`，内存上限用 `MemoryMax=`（见 pitfalls.md §7）
+  - `[mysqld_safe]` 里加 `malloc-lib = /usr/lib64/libjemalloc.so.2`（`dnf install jemalloc`，EPEL）：glibc malloc 下 mysqld 的内存会随运行时间一直上涨
+- 现成工具：`finalize.sh oom-policy`（上面第一条）；`scripts/mysql-backup.sh`（宿主机 + 容器实例统一备份：逐库 gzip、校验 `Dump completed`、导出账号、保留天数、`--check`、给 categraf 的 `--metrics`，用法见脚本开头）。
+- 备份脚本：EL10 的 `/usr/bin/mysqldump` 是 8.4，忽略 `MYSQL_PWD`；`/etc/my.cnf` 里 `[mysqldump]` 段的 user/password 会覆盖环境变量。用 `--defaults-file=<600 临时文件>` 传账号，并用和服务端同大版本的 mysqldump（tarball 自带的，或 `docker exec` 容器里的）。每个文件检查 `-- Dump completed` 和管道退出码——`>/dev/null 2>&1` 的老 cron 脚本可能已经静默失败很久（真实案例：一个库里有大写表名、服务端 `lower_case_table_names=1`，全库备份每晚在这个库中止）。
 
 ## postfix
 

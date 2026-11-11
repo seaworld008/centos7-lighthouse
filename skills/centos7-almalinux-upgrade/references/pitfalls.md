@@ -238,6 +238,16 @@
 
 ## 7. 升级后应用层
 
+**★ 服务被 OOM 杀掉后整个 unit 停掉、不再启动（MySQL 停了 10 小时才发现）**
+- 现象：`systemctl status` 显示 `failed (Result: oom-kill)`；EL7 上同样超限时服务会自己恢复。
+- 原因：unit 有 `MemoryLimit=`/`MemoryMax=` drop-in。EL7 的 systemd 只是让内核杀掉超限的那个进程，mysqld_safe 之类的守护进程会把它拉起来；EL9+ 默认 `OOMPolicy=stop`，杀掉一个进程就停掉整个 unit（守护进程一起停），SysV 生成的 unit 默认 `Restart=no`。凌晨备份（mysqldump）这类高峰最容易触发。
+- 处理：drop-in 改成 `MemoryMax=`（cgroup v2 下 `MemoryLimit=` 已废弃）+ `OOMPolicy=continue` + `Restart=on-failure`，上限按实际占用（buffer pool + 连接数 × 每连接缓冲）留出余量。`survey.sh` 会提示，`finalize.sh oom-policy` 自动改。宿主机 MySQL 再加 jemalloc（见 app-compat.md 宿主机数据库）。
+
+**★ mysqldump 备份脚本升级后连不上 / 一直在静默失败**
+- 现象：备份文件是 0 字节，或者结尾没有 `-- Dump completed`；cron 里 `>/dev/null 2>&1` 所以没人知道。
+- 原因：EL10 的 `/usr/bin/mysqldump` 是 MySQL 8.4（老的 mysql-community-client 没有 EL10 包），**不认 `MYSQL_PWD`**；`/etc/my.cnf` 的 `[mysqldump]` 段里的 user/password 会覆盖命令行以外的来源。另一类是和升级无关、早就存在的失败（真实案例：一个库里有大写表名、服务端 `lower_case_table_names=1`，全库备份每晚在这个库中止，后面的库从没进过全量备份）。
+- 处理：用 `--defaults-file=<600 临时文件>` 传账号、用与服务端同大版本的 mysqldump、逐个检查结尾和退出码 → `scripts/mysql-backup.sh`。`survey.sh` 会列出 cron 里的 mysqldump 脚本。
+
 **★ 自编译 nginx：`libssl.so.10: cannot open shared object file`**
 - 处理：过渡期 `nginx-static-build.sh`（同版本静态 OpenSSL/PCRE，实测 EL8 上编译后在 EL9、EL10 都能跑）；最终换 nginx.org 官方包。
 

@@ -52,6 +52,25 @@ t "finalize.sh usage"   bash -c "bash '$K/finalize.sh' | grep -q compose-wrapper
 t "k8s.sh usage"        bash -c "bash '$K/k8s.sh' | grep -q 'k8s.sh backup' && bash '$K/k8s.sh' | grep -q jvm-maxram"
 t "k8s.sh pods 无 kubectl 时优雅退出" bash -c "out=\$(bash '$K/k8s.sh' pods 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'kubectl 连不上'"
 t "k8s.sh check 无 kubelet/docker 不报 shell 错" bash -c "! bash '$K/k8s.sh' check 2>&1 | grep -E 'syntax error|unbound variable|bad substitution'"
+
+# mysql-backup.sh：状态/指标逻辑（不连数据库，用临时配置目录）
+MB=$W/mb; mkdir -p "$MB/conf" "$MB/ok/2026-01-01_0200" "$MB/bad"
+printf "MODE=tcp\nDB_PASS='p\"w'\nDEST=%s\n" "$MB/ok" > "$MB/conf/good.conf"
+echo "OK 2026-01-01 02:00:00 dbs=3 size=1M secs=5 dir=$MB/ok/2026-01-01_0200" > "$MB/ok/LAST_STATUS"
+printf 'DEST=%s\n' "$MB/bad" > "$MB/conf/bad.conf"; echo "FAIL 2026-01-01 02:00:00 dbs=3 failed=1" > "$MB/bad/LAST_STATUS"
+export MYSQL_BACKUP_CONF_DIR=$MB/conf MYSQL_BACKUP_LOG=$MB/log MYSQL_BACKUP_LOCK=$MB/lock
+t "mysql-backup.sh --metrics" bash -c "out=\$(bash '$K/mysql-backup.sh' --metrics); echo \"\$out\"; echo \"\$out\" | grep -q 'instance=good ok=1i,age_hours=0i' && echo \"\$out\" | grep -q 'instance=bad ok=0i'"
+t "mysql-backup.sh --check 有失败时返回 1" bash -c "! bash '$K/mysql-backup.sh' --check"
+t "mysql-backup.sh --check 全部成功时返回 0" bash -c "rm -f '$MB/conf/bad.conf'; bash '$K/mysql-backup.sh' --check"
+t "mysql-backup.sh 连不上时记 FAIL" bash -c "printf 'MODE=tcp\nDUMP_DIR=/nonexistent\nDEST=%s\n' '$MB/nc' > '$MB/conf/nc.conf'; ! bash '$K/mysql-backup.sh' nc; grep -q '^FAIL' '$MB/nc/LAST_STATUS'"
+unset MYSQL_BACKUP_CONF_DIR MYSQL_BACKUP_LOG MYSQL_BACKUP_LOCK
+
+# finalize.sh oom-policy：用临时 unit 目录
+U=$W/units; mkdir -p "$U/demo.service.d" "$U/done.service.d"
+printf '[Service]\nMemoryAccounting=true\nMemoryLimit=4G\n' > "$U/demo.service.d/override.conf"
+printf '[Service]\nMemoryMax=1G\nOOMPolicy=continue\n' > "$U/done.service.d/override.conf"
+t "finalize.sh oom-policy 改 MemoryMax + OOMPolicy + Restart" bash -c "SYSTEMD_DIR='$U' bash '$K/finalize.sh' oom-policy; grep -q '^MemoryMax=4G' '$U/demo.service.d/override.conf' && grep -q '^OOMPolicy=continue' '$U/demo.service.d/90-oom-policy.conf' && grep -q '^Restart=on-failure' '$U/demo.service.d/90-oom-policy.conf' && [ ! -e '$U/done.service.d/90-oom-policy.conf' ]"
+t "finalize.sh oom-policy 幂等" bash -c "SYSTEMD_DIR='$U' bash '$K/finalize.sh' oom-policy | grep -q '没有需要修改的 unit'"
 # ---- 会修改系统、但对任何 EL 版本都安全的测试（只在一次性容器里）----
 if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
   printf '[kubernetes]\nname=k8s\nbaseurl=https://example.com/kubernetes-el7-x86_64\nenabled=1\n' > /etc/yum.repos.d/kubernetes.repo

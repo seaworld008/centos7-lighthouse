@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
+升级后运维阶段的经验（升级后第 2~3 天在已升级的机器上发现）：宿主机 MySQL 被 OOM 后整个服务停了 10 小时、老备份脚本静默失败了几个月、K8s 节点 IPv6 导致 flannel 丢包。见 2026-11-08 报告 4.12/4.13、2026-11-07 报告 4.13。
+
+### Added（`verified-on-real-run`）
+- ★ `scripts/mysql-backup.sh`：替换老的 mysqldump cron 脚本。宿主机实例（同大版本客户端）和容器实例（`docker exec` 容器内 mysqldump）统一配置；一次只备份一个实例；逐库 gzip，校验 `-- Dump completed` 和管道退出码；导出账号权限；保留天数 + 最少份数；`--check`；`--metrics` 给 categraf exec（`mysql_backup_ok/age_hours/size_mb`）。密码只经 600 临时文件/管道，用 `--defaults-file` 避开 `/etc/my.cnf` 里 `[mysqldump]` 的账号。两台测试机 6 个实例（MySQL 5.7 / 8.0、MariaDB 10.4）实测，含一次恢复校验
+- `finalize.sh oom-policy`：设了内存上限的 unit 改 `MemoryMax=`，加 drop-in `OOMPolicy=continue`（没有 Restart 的补 `Restart=on-failure`）
+- `survey.sh`：unit 设了 MemoryLimit/MemoryMax 但没设 OOMPolicy → MEDIUM（EL9+ 默认 `OOMPolicy=stop`）；cron 里调用 mysqldump 的备份脚本 → INFO（提醒核对备份完整性、8.4 不认 `MYSQL_PWD`）
+- `k8s.sh check`：flannel.1 有 IPv6 地址时提示（tx_dropped 会慢慢涨、触发丢包告警）
+- 文档：`pitfalls.md` §7 OOMPolicy、mysqldump 备份静默失败；`app-compat.md` 宿主机 tarball MySQL（OOMPolicy + jemalloc）、备份脚本要点；`kubernetes.md` §4 flannel IPv6 丢包；`SKILL.md` 阶段 4 加两条
+
+### Changed
+- `tests/container-smoke.sh`：覆盖 `mysql-backup.sh --metrics/--check`/连不上时记 FAIL、`finalize.sh oom-policy`（含幂等）（`container-smoke`）
+
+### 0.4.0 之后已合并、随本版本发布的内容
+
 CI 构建机（阿里云）：宿主机 Jenkins + GitLab omnibus 容器 + 共享 nginx 网关，CentOS 7.9 → AlmaLinux 10.2，约 2.3 小时。见 [实战报告](field-reports/2026-11-10-aliyun-jenkins-gitlab-ci.md)。
 
 ### Added（`verified-on-real-run`）

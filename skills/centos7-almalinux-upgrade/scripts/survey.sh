@@ -98,6 +98,15 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     t=$(docker inspect -f '{{if .Config.StopTimeout}}{{.Config.StopTimeout}}{{end}}' "$n" 2>/dev/null); [ "${t:-0}" -lt 120 ] && echo "$n"; done | tr '\n' ' ')
   [ -n "$GL" ] && flag MEDIUM "GitLab omnibus 容器 ${GL}没设 stop_grace_period：dockerd 重启/关机只给 10s 就 SIGKILL，内置 PostgreSQL 留下 .s.PGSQL.5432.lock，之后一直 502（真实踩坑）。compose 里加 stop_grace_period: 5m；hop.sh reboot/post 会先优雅停止它"
 fi
+# 给 unit 设了内存上限但没设 OOMPolicy：EL9+ 的 systemd 默认 OOMPolicy=stop，内核杀掉一个进程就把整个 unit 停掉（连 mysqld_safe 这类守护一起），SysV 生成的 unit 又是 Restart=no → 服务一直挂着
+MEMU=""
+for f in /etc/systemd/system/*.service /etc/systemd/system/*.service.d/*.conf; do
+  [ -e "$f" ] || continue
+  grep -qE '^(MemoryLimit|MemoryMax)=' "$f" || continue
+  u=${f#/etc/systemd/system/}; u=${u%%.d/*}
+  grep -qsE '^OOMPolicy=' "/etc/systemd/system/$u" /etc/systemd/system/"$u".d/*.conf || MEMU="$MEMU $u"
+done
+[ -n "$MEMU" ] && flag MEDIUM "unit 设了 MemoryLimit/MemoryMax 但没设 OOMPolicy（${MEMU# }）：EL7 上超限只杀一个进程，mysqld_safe 等守护会把它拉起来；EL9+ 默认 OOMPolicy=stop 会停掉整个 unit 且不重启（真实踩坑：MySQL 在每晚 mysqldump 时超 4G 被杀，一直停到第二天发版时才发现）。升级后改成 MemoryMax=（cgroup v2 下 MemoryLimit 已废弃）+ OOMPolicy=continue + Restart=on-failure，并按实际占用调大上限"
 
 sec OPENSSH
 rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} vendor=%{VENDOR} sig=%{SIGPGP:pgpsig}\n' openssh-server 2>/dev/null
@@ -177,6 +186,9 @@ done
 [ "$PIPN" -gt 0 ] && flag BLOCKER "有 $PIPN 个 pip 装的、不属于任何 rpm 的 site-packages 文件：升级时和 rpm 文件冲突(cpio rename)会让升级在 initramfs 里半途失败！EL7 上运行 prep-el7.sh pipfix（EL8/9 上 hop.sh prep 会自动挪走）"
 has php && php -v 2>/dev/null | head -1
 for p in mysqld mariadbd postgres postmaster mongod redis-server elasticsearch; do pgrep -x $p >/dev/null 2>&1 && echo "DB process: $p ($(readlink /proc/$(pgrep -xo $p)/exe 2>/dev/null))"; done
+# cron 里调用 mysqldump 的备份脚本：升级后 /usr/bin/mysqldump 变成 8.4（不认 MYSQL_PWD），而老脚本常 >/dev/null 2>&1 静默失败
+MDS=$(for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u "$u" 2>/dev/null; done | grep -v '^\s*#' | grep -oE '/[^ ;|>]+\.sh' | sort -u | while read -r s; do [ -f "$s" ] && grep -lq mysqldump "$s" 2>/dev/null && echo "$s"; done | tr '\n' ' ')
+[ -n "$MDS" ] && flag INFO "cron 里有 mysqldump 备份脚本（${MDS}）：升级前后都确认最近一次备份文件结尾有 '-- Dump completed'、各库都有文件（真实案例：全库备份每晚在一个坏库中止，持续几个月没人发现）。EL10 的 mysqldump 是 8.4，不认 MYSQL_PWD。可换成 scripts/mysql-backup.sh（逐库校验 + 监控指标）"
 rpm -qa | grep -qE "^(mariadb-server|postgresql-server|mysql-server)-" && flag BLOCKER "宿主机装了 rpm 版数据库服务（$(rpm -qa | grep -E '^(mariadb-server|postgresql-server|mysql-server)-' | tr '\n' ' ')）：每跳都会大版本升级，数据目录格式变化。先逻辑备份(mysqldump/pg_dumpall)，制定每跳 mysql_upgrade/pg_upgrade 方案"
 
 sec CUSTOM BINARIES（运行中、非 rpm 安装的可执行文件及其 EL7 库依赖）
