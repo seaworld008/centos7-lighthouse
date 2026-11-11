@@ -33,6 +33,8 @@ fi
 NG=$(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | head -1 | tr -d ' ')
 [ -n "$NG" ] && [ ! -x "$NG" ] && NG=""          # 容器里的 nginx 进程，路径在宿主机上不存在
 [ -z "$NG" ] && command -v nginx >/dev/null 2>&1 && NG=$(command -v nginx)
+# --http1.1 需要 curl ≥7.33；EL7 的 curl 7.29 不认识这个参数，整条命令报错 → 所有探测都成了 000（真实踩坑）
+H11=""; curl --http1.1 -s -o /dev/null file:///dev/null 2>/dev/null && H11="--http1.1"
 {
   [ -n "$NG" ] && $NG -T 2>/dev/null
   if command -v docker >/dev/null 2>&1; then
@@ -46,8 +48,8 @@ NG=$(pgrep -a nginx 2>/dev/null | grep master | grep -oE "/[^ ]*nginx( |$)" | he
   | grep -vE "^(_|localhost|\*.*|~.*|)$" | sort -u | while read -r h; do
     for sch in https http; do
       port=443; [ $sch = http ] && port=80
-      # 固定 --http1.1：EL7 的 curl 不走 h2，EL8+ 的 curl 默认协商 h2，且对非法响应头（如 add_header "X-Foo:" 带冒号）直接报 PROTOCOL_ERROR → 000，基线前后不可比
-      code=$(curl -sk --http1.1 -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
+      # 固定 --http1.1（curl 支持时）：EL7 的 curl 不走 h2，EL8+ 的 curl 默认协商 h2，且对非法响应头（如 add_header "X-Foo:" 带冒号）直接报 PROTOCOL_ERROR → 000，基线前后不可比
+      code=$(curl -sk $H11 -o /dev/null -m 8 -w '%{http_code}' --resolve "$h:$port:127.0.0.1" "$sch://$h/" 2>/dev/null)
       printf "http\t%s://%s/\t%s\n" "$sch" "$h" "${code:-000}"
     done
   done
@@ -57,7 +59,7 @@ ss -tln 2>/dev/null | tail -n +2 | awk -v e="$EPH" '{split($4,a,":"); p=a[length
   case "$p" in 22|25|111|323|10050) continue;; esac
   echo " $SSHP " | grep -q " $p " && continue
   sch=http; [ "$p" = 443 ] || [ "$p" = 8443 ] && sch=https
-  code=$(curl -sk --http1.1 -o /dev/null -m 4 -w '%{http_code}' "$sch://127.0.0.1:$p/" 2>/dev/null)
+  code=$(curl -sk $H11 -o /dev/null -m 4 -w '%{http_code}' "$sch://127.0.0.1:$p/" 2>/dev/null)
   printf "http\t%s://127.0.0.1:%s/\t%s\n" "$sch" "$p" "${code:-000}"
 done
 

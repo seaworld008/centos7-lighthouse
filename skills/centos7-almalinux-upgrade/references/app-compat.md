@@ -4,6 +4,9 @@
 - nginx（自编译 → 官方包）
 - Docker / compose / cgroup v2
 - Java
+- Jenkins / CI 构建机
+- Node.js 构建工具链（多版本）
+- GitLab（omnibus 容器）
 - Python
 - PHP
 - 宿主机数据库
@@ -49,6 +52,32 @@
 - EL10 只提供 Java 21/25；宿主机上 Java 8/11/17 会被 leapp 删除。容器里的 JDK 不受影响。
 - 宿主机直接跑 jar 的：改用容器，或自带 JDK（如 Temurin 8/17 tar 包放 /opt），在 unit 里写绝对路径。
 
+## Jenkins / CI 构建机
+
+实测：Jenkins 2.346.1（最后一个支持 Java 8 的 LTS）+ 自带 JDK 8u92（tar 包）在 EL8/9/10 上原样可用，367 个任务、133 个插件不用动。**OS 升级时不要顺便升级 Jenkins**（2.361+ 要 Java 11/17，插件要一起升），另起变更。
+- **先看实际版本**：rpm 版本常常不代表运行版本（war 被手工替换过）：`unzip -p /usr/lib/jenkins/jenkins.war META-INF/MANIFEST.MF | grep Jenkins-Version`。
+- **启动方式**：老 rpm 是 SysV 脚本（依赖 `/etc/init.d/functions`）。在 EL7 上就换成原生 unit，并且**环境变量与现在完全一致**——构建任务继承 Jenkins 的环境：先 `tr '\0' '\n' < /proc/<pid>/environ` 记下 PATH/LANG/HOME/SHELL（实测 SysV 下 `PATH=/sbin:/usr/sbin:/bin:/usr/bin`，**不含 /usr/local/bin**），以及 `/proc/<pid>/limits` 的 nofile。要点：`Type=simple`、`User=root`（与原来一致）、去掉 `--daemon`、`KillMode=process`（构建里起的后台进程不随 Jenkins 重启被杀）、`SuccessExitStatus=143`。旧的"systemd 219 下监控 Jenkins PID"之类的看门狗 timer 换 unit 后用 `Restart=on-failure` 代替。
+- **rpm 签名**：2.2xx 的 rpm 是 DSA/SHA1 签名，8→9 阻断。换完 unit 后 `rpm -e --justdb --noscripts --nodeps jenkins`（只删 rpm 记录，见 pitfalls.md 8→9）。
+- **构建依赖的宿主机命令**：先统计任务 shell 里用到的命令（`<command>` 段的首个单词），逐个确认来源（rpm / /usr/local / tools 目录 / 远程 ssh 执行）。`/etc/profile` 里设置的 JAVA_HOME/MAVEN_HOME/node PATH 升级后保留（任务里 `source /etc/profile` 的照常可用）。
+- **git**：1.8.3 → 2.43（EL8）→ 2.52（EL10），Jenkins git 插件 4.x 兼容；Jenkins 的 git 工具路径（`hudson.plugins.git.GitTool.xml`）若指向 SCL 的 `rh-git*`，SCL 会被删，先改成 `/usr/bin/git`。
+- **rsync 推送**：rsyncd 在 EL8+ 由 `rsync-daemon` 包提供（leapp 实测会带上）；`/etc/rsyncd.conf`、secrets 文件保留。验证要从 `hosts allow` 里的部署机上做（本机 127.0.0.1 往往不在白名单）。
+- **验证**：不想触发部署的话，把 workspace 复制出来（`rsync --exclude /.git --exclude /dist`——注意 `/dist` 前面的斜杠，否则会把 node_modules 里所有 dist 目录排除掉）按任务里的命令构建；Maven 用 `-o package` 不碰 ~/.m2。
+
+## Node.js 构建工具链（多版本）
+
+- **官方预编译的 Node 二进制向后兼容新 glibc**：实测 v11.11 / v13.12 / v15.2 / v16.14 / v16.20 / v17.9 / v18.20 / v20.19 在 AlmaLinux 10.2 上全部可用（含 vue-cli 2、cnpm、bower、yarn、pnpm 全局工具）。Jenkins NodeJS 插件装在 `$JENKINS_HOME/tools/jenkins.plugins.nodejs.tools.NodeJSInstallation/` 下的版本不用重装。
+- **反而是 EL7 跑不了新 Node**：Node ≥18 官方二进制要 glibc 2.28，EL7 只有 2.17（`GLIBC_2.27 not found`）。升级后 Node 18/20/22 才真正能在宿主机上用。
+- **node-sass（4.x）**：通常下载预编译 binding（`linux-x64-<abi>`），与 OS 无关；下载失败时回退 node-gyp 源码编译，老 node-gyp 需要 **python2，EL9 起没有**。给 npm 配置固定镜像兜底：`sass_binary_site=https://registry.npmmirror.com/-/binary/node-sass`（写进运行构建的用户的 `.npmrc`）。新项目用 dart-sass（`sass` 包）。
+- **puppeteer/Chromium**：EL10 需要补 `nss atk at-spi2-atk cups-libs libdrm libxkbcommon libXcomposite libXdamage libXrandr mesa-libgbm pango alsa-lib gtk3`。
+- 注意构建任务里的 `npm config set registry ...` 会改写全局 `~/.npmrc`；手工加的配置不要和它冲突。
+
+## GitLab（omnibus 容器）
+
+- 容器部署的 GitLab 与宿主机 OS 无关（实测 17.6.2 在 Docker 26 → 29、cgroup v1 → v2 下正常），数据卷、ssh host key（`config/ssh_host_*`）保留。
+- **★ 必须设 `stop_grace_period: 5m`**：dockerd 重启（docker-ce 被 dnf 升级时）或关机时默认 10 秒就 SIGKILL，内置 PostgreSQL 留下锁文件，之后一直 502（见 pitfalls.md §6）。改完 `docker stop -t 300` 后 `docker compose up -d` 重建一次。
+- 健康检查：`curl -s http://127.0.0.1/-/readiness?all=1`（容器内），`gitlab-ctl status` 全部 run；首次启动 2~5 分钟内 502 是正常的。
+- 宿主机上的备份脚本（`gitlab-backup` 包装、保留策略）如果是 Python 写的，注意 shebang（见 pitfalls.md §7）。
+
 ## Python
 
 - EL9 起无 python2；pip 装到系统 site-packages 的包是升级失败头号元凶（每跳前 pipfix）。
@@ -65,6 +94,11 @@
 - rpm 版 mariadb/postgresql 每跳都会大版本升级：MariaDB 5.5→10.3→10.5→10.11 每跳后跑 `mysql_upgrade`/`mariadb-upgrade`；PostgreSQL 9.2→10→13→16 每跳都要 `pg_upgrade`（或最稳：升级前 `pg_dumpall`，升级后新建实例导入）。
 - 数据量大/关键库：建议迁出到云数据库或新机器，不要原地连跳。
 - 容器里的数据库不受影响，重启前优雅停止即可。
+- 宿主机 tarball 版 MySQL 5.7（mysqld_safe + SysV）在 EL10 上能跑（要 EPEL 的 libxcrypt-compat、ncurses-compat-libs），但要补两件事（真实踩坑：每晚备份时内存超限被杀，停了 10 小时）：
+  - unit 的 drop-in 加 `OOMPolicy=continue` + `Restart=on-failure`，内存上限用 `MemoryMax=`（见 pitfalls.md §7）
+  - `[mysqld_safe]` 里加 `malloc-lib = /usr/lib64/libjemalloc.so.2`（`dnf install jemalloc`，EPEL）：glibc malloc 下 mysqld 的内存会随运行时间一直上涨
+- 现成工具：`finalize.sh oom-policy`（上面第一条）；`scripts/mysql-backup.sh`（宿主机 + 容器实例统一备份：逐库 gzip、校验 `Dump completed`、导出账号、保留天数、`--check`、给 categraf 的 `--metrics`，用法见脚本开头）。
+- 备份脚本：EL10 的 `/usr/bin/mysqldump` 是 8.4，忽略 `MYSQL_PWD`；`/etc/my.cnf` 里 `[mysqldump]` 段的 user/password 会覆盖环境变量。用 `--defaults-file=<600 临时文件>` 传账号，并用和服务端同大版本的 mysqldump（tarball 自带的，或 `docker exec` 容器里的）。每个文件检查 `-- Dump completed` 和管道退出码——`>/dev/null 2>&1` 的老 cron 脚本可能已经静默失败很久（真实案例：一个库里有大写表名、服务端 `lower_case_table_names=1`，全库备份每晚在这个库中止）。
 
 ## postfix
 

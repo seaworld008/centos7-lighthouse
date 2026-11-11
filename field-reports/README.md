@@ -18,6 +18,7 @@
 ## 索引
 | 日期 | 云 | 画像 | 路径 | 结果 | 报告 |
 |---|---|---|---|---|---|
+| 2026-11-10 | 阿里云 | **CI 构建机**：宿主机 Jenkins 2.346.1（rpm + 手工 war，JDK 8，367 任务，Node 11~20 共 8 个版本）+ GitLab omnibus 容器 + 共享 nginx 网关 + rsync 推送；412 天没重启 | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（约 2.3 小时；GitLab PostgreSQL 锁文件事故后补了容器保护；修复/新增 7 处） | [link](2026-11-10-aliyun-jenkins-gitlab-ci.md) |
 | 2026-11-08 | 阿里云 | **两台 PHP + 中间件测试机并行**（861 / 1529 天没重启）：自编译 nginx（OpenSSL 3）+ PHP 7.2 容器 + 20~28 个中间件容器 + 宿主机 tarball MySQL 5.7 + 达梦 DM8 + OceanBase 工具 | CentOS 7.6 / 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（约 3.3 小时；修复 8 处；依赖它们的 K8s pod 自动恢复） | [link](2026-11-08-aliyun-php-middleware-x2.md) |
 | 2026-11-07 | 阿里云 | **K8s 1.21 集群 3 master + 3 worker**（dockershim/flannel/ipvs/stacked etcd/NFS 存储类，约 120 pod）+ 宿主机 50 个容器、手工启动的 Java、OpenVPN/wg-easy | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2（K8s 版本不变） | ✅ 成功（约 6.5 小时；2 台 master 进 emergency 后救回；新增 k8s.sh） | [link](2026-11-07-aliyun-k8s-1.21-3m3w.md) |
 | 2026-11-06 | 阿里云 | 测试应用机：PHP 应用容器 ×4 + MySQL8/Redis 容器 + 宿主机 tarball MySQL 5.7 + cron docker exec | CentOS 7.9 → Alma 8.10 → 9.8 → 10.2 | ✅ 成功（全程脚本，约 1.9 小时；修复 4 处） | [link](2026-11-06-aliyun-test-apps-hostmysql-centos7.md) |

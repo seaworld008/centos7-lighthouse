@@ -37,8 +37,9 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post` |
 | `nginx-static-build.sh` | 自编译 nginx 同版本静态重编（过渡期一路可用） |
 | `fleet_summary.py` | 本机运行：汇总多台 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批） |
-| `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务 |
-| `k8s.sh` | K8s 节点：`backup`（etcd 快照/配置/二进制/pod 列表，自动 `pin` 版本）、`stop`、`nfs-off`/`nfs-on`、`nm`、`fix`、`check`、`pods`（与升级前对比）、`jvm-maxram`（cgroup v2 下老 JDK 的 OOM） |
+| `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务、`oom-policy`（EL9+ 默认 OOMPolicy=stop） |
+| `mysql-backup.sh` | 收尾后可选：替换老的 mysqldump cron 脚本——宿主机/容器 MySQL 逐库备份 + 校验 + `--check`/`--metrics` 监控 |
+| `k8s.sh` | K8s 节点：`backup`（etcd 快照/配置/二进制/pod 列表，自动 `pin` 版本）、`stop`、`nfs-off`/`nfs-on`、`nm`、`fix`、`check`（含 flannel.1 IPv6 丢包提示）、`pods`（与升级前对比）、`jvm-maxram`（cgroup v2 下老 JDK 的 OOM） |
 
 本机在 Windows Git Bash 下调用时，`remote.py` 已自动处理 MSYS 把 `/root/...` 改写成 `C:/Program Files/Git/root/...` 的问题。
 
@@ -114,6 +115,8 @@ bash verify.sh <BACKUP_DIR>   # FAIL 必须处理；WARN 判断是否预期
 - `docker-compose` v1 → 包装到 compose v2；cgroup v1 老应用加 shim
 - kubectl → pkgs.k8s.io 源、与集群同 minor；helm → 最新 v3
 - postfix hash → lmdb；rc.local 里的启动项改成 systemd unit
+- 设了内存上限的 unit → `finalize.sh oom-policy`（否则 OOM 一次整个服务就停了、不会再起来）
+- 数据库备份：确认 cron 备份脚本升级后真的在产出完整文件（结尾有 `-- Dump completed`），不行就换 `mysql-backup.sh`
 - `dnf -y upgrade` 全量更新，确认 `dnf check-update` 为空
 - **最后再重启一次做开机自启测试**，跑 `verify.sh`，全部服务自己起来才算完成
 

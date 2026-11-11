@@ -80,6 +80,33 @@ REMI_LIBS=$(echo "$REMI_ALL" | grep -vE '^(php|remi-release)' | tr '\n' ' ' | se
 rpm -qa | grep -qE "^(python2-|python-)" && [ "$MAJOR" = 8 ] && flag INFO "EL8 仍有 python2 包；EL9 起没有 python2"
 HN=$(tr -d '[:space:]' < /etc/hostname 2>/dev/null); [ -z "$HN" ] && HN=$(hostname)
 echo "$HN" | grep -q '[^A-Za-z0-9.-]' && flag MEDIUM "主机名 '$HN' 含下划线等非法字符：EL9 起 systemd 开机时会把这些字符去掉（实测 app_01 → app01），用 \$hostname 拼 ident 的监控 agent（categraf 等）会换成新目标、旧目标告警失联。升级后在 agent 配置里写死旧 ident，或改成合法主机名（见 pitfalls.md 8→9）"
+# 不带版本号的 python shebang：EL8 起没有 /usr/bin/python，EL10 只有 python3 → 备份/巡检/日志轮转脚本静默失败
+PYSH=""; for f in /usr/local/bin/* /usr/local/sbin/* /root/script*/* /root/bin/*; do
+  [ -f "$f" ] || continue; head -1 "$f" 2>/dev/null | grep -qE '^#! *(/usr)?/bin/(env +)?python *$' && PYSH="$PYSH $f"
+done
+[ -n "$PYSH" ] && flag MEDIUM "脚本用不带版本的 python shebang（${PYSH# }）：EL8 起没有 /usr/bin/python，cron/logrotate/systemd 调用会 203/EXEC 或 command not found（真实案例：GitLab 每日备份、磁盘巡检、nginx 日志轮转脚本）。确认兼容 python3 后把首行改成 #!/usr/bin/python3"
+# 第三方 rpm 拥有的可执行文件被手工替换过：卸载/升级该包时会被删除或覆盖
+MODF=$(rpm -qa --qf '%{NAME}|%{VENDOR}\n' 2>/dev/null | awk -F'|' 'tolower($2) !~ /(centos|red hat|almalinux|rocky)/ {print $1}' | while read -r p; do
+  rpm -V --nomtime "$p" 2>/dev/null | awk '$1 ~ /5/ && $2 != "c" && $NF ~ /^\/(usr\/)?(local\/)?s?bin\//{print $NF}'; done | sort -u | tr '\n' ' ' | sed 's/ *$//')
+[ -n "$MODF" ] && flag MEDIUM "第三方 rpm 拥有的可执行文件被手工替换过（${MODF}）：卸载/升级该包时会被删除或覆盖（真实案例：/usr/bin/php 被换成调用 PHP 容器的包装脚本，卸载 remi php-cli 时一起被删）。先复制到 /usr/local/bin，卸载后再链接回来"
+if rpm -q jenkins >/dev/null 2>&1; then
+  JW=""; rpm -V jenkins 2>/dev/null | grep -q 'jenkins\.war$' && JW="（war 已被手工替换，rpm 版本不代表实际运行版本）"
+  flag INFO "Jenkins rpm $(rpm -q --qf '%{VERSION}' jenkins)${JW}：老包是 SysV 启动 + 老签名（2.2xx 的 DSA/SHA1 签名是 8→9 阻断项）。见 app-compat.md 的 Jenkins：先换原生 systemd unit（环境变量与现在一致），8→9 前 rpm -e --justdb --noscripts jenkins"
+fi
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  GL=$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | awk 'tolower($2) ~ /gitlab\/gitlab-(ce|ee)|gitlab-(ce|ee):/ {print $1}' | while read -r n; do
+    t=$(docker inspect -f '{{if .Config.StopTimeout}}{{.Config.StopTimeout}}{{end}}' "$n" 2>/dev/null); [ "${t:-0}" -lt 120 ] && echo "$n"; done | tr '\n' ' ')
+  [ -n "$GL" ] && flag MEDIUM "GitLab omnibus 容器 ${GL}没设 stop_grace_period：dockerd 重启/关机只给 10s 就 SIGKILL，内置 PostgreSQL 留下 .s.PGSQL.5432.lock，之后一直 502（真实踩坑）。compose 里加 stop_grace_period: 5m；hop.sh reboot/post 会先优雅停止它"
+fi
+# 给 unit 设了内存上限但没设 OOMPolicy：EL9+ 的 systemd 默认 OOMPolicy=stop，内核杀掉一个进程就把整个 unit 停掉（连 mysqld_safe 这类守护一起），SysV 生成的 unit 又是 Restart=no → 服务一直挂着
+MEMU=""
+for f in /etc/systemd/system/*.service /etc/systemd/system/*.service.d/*.conf; do
+  [ -e "$f" ] || continue
+  grep -qE '^(MemoryLimit|MemoryMax)=' "$f" || continue
+  u=${f#/etc/systemd/system/}; u=${u%%.d/*}
+  grep -qsE '^OOMPolicy=' "/etc/systemd/system/$u" /etc/systemd/system/"$u".d/*.conf || MEMU="$MEMU $u"
+done
+[ -n "$MEMU" ] && flag MEDIUM "unit 设了 MemoryLimit/MemoryMax 但没设 OOMPolicy（${MEMU# }）：EL7 上超限只杀一个进程，mysqld_safe 等守护会把它拉起来；EL9+ 默认 OOMPolicy=stop 会停掉整个 unit 且不重启（真实踩坑：MySQL 在每晚 mysqldump 时超 4G 被杀，一直停到第二天发版时才发现）。升级后改成 MemoryMax=（cgroup v2 下 MemoryLimit 已废弃）+ OOMPolicy=continue + Restart=on-failure，并按实际占用调大上限"
 
 sec OPENSSH
 rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} vendor=%{VENDOR} sig=%{SIGPGP:pgpsig}\n' openssh-server 2>/dev/null
@@ -159,6 +186,9 @@ done
 [ "$PIPN" -gt 0 ] && flag BLOCKER "有 $PIPN 个 pip 装的、不属于任何 rpm 的 site-packages 文件：升级时和 rpm 文件冲突(cpio rename)会让升级在 initramfs 里半途失败！EL7 上运行 prep-el7.sh pipfix（EL8/9 上 hop.sh prep 会自动挪走）"
 has php && php -v 2>/dev/null | head -1
 for p in mysqld mariadbd postgres postmaster mongod redis-server elasticsearch; do pgrep -x $p >/dev/null 2>&1 && echo "DB process: $p ($(readlink /proc/$(pgrep -xo $p)/exe 2>/dev/null))"; done
+# cron 里调用 mysqldump 的备份脚本：升级后 /usr/bin/mysqldump 变成 8.4（不认 MYSQL_PWD），而老脚本常 >/dev/null 2>&1 静默失败
+MDS=$(for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u "$u" 2>/dev/null; done | grep -v '^\s*#' | grep -oE '/[^ ;|>]+\.sh' | sort -u | while read -r s; do [ -f "$s" ] && grep -lq mysqldump "$s" 2>/dev/null && echo "$s"; done | tr '\n' ' ')
+[ -n "$MDS" ] && flag INFO "cron 里有 mysqldump 备份脚本（${MDS}）：升级前后都确认最近一次备份文件结尾有 '-- Dump completed'、各库都有文件（真实案例：全库备份每晚在一个坏库中止，持续几个月没人发现）。EL10 的 mysqldump 是 8.4，不认 MYSQL_PWD。可换成 scripts/mysql-backup.sh（逐库校验 + 监控指标）"
 rpm -qa | grep -qE "^(mariadb-server|postgresql-server|mysql-server)-" && flag BLOCKER "宿主机装了 rpm 版数据库服务（$(rpm -qa | grep -E '^(mariadb-server|postgresql-server|mysql-server)-' | tr '\n' ' ')）：每跳都会大版本升级，数据目录格式变化。先逻辑备份(mysqldump/pg_dumpall)，制定每跳 mysql_upgrade/pg_upgrade 方案"
 
 sec CUSTOM BINARIES（运行中、非 rpm 安装的可执行文件及其 EL7 库依赖）

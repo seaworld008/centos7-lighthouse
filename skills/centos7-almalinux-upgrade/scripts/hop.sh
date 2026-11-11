@@ -59,6 +59,27 @@ pipfix() {
   echo "pip 冲突清理：挪走 $n 个不属于 rpm 的 site-packages 文件 ${n:+→ $D}"
 }
 
+# 优雅停止有状态容器（restart=always 的才停：开机/docker 重启后会自己拉起）。记录到 $K/stateful-stopped.txt
+# docker 默认 10s 就 SIGKILL：GitLab omnibus（内置 PostgreSQL/Redis）来不及关 → 残留锁文件，下次起不来（真实踩坑）
+STATEFUL_RE="mysql|mariadb|postgres|mongo|redis|elasticsearch|opensearch|clickhouse|kafka|zookeeper|etcd|minio|rabbitmq|influx|tdengine|nacos|gitlab|gitea|gogs|sonarqube|nexus|jira|confluence|harbor"
+stop_stateful() { # stop_stateful [额外容器名...]
+  command -v docker >/dev/null && docker info >/dev/null 2>&1 || return 0
+  : > $K/stateful-stopped.txt
+  for c in $(docker ps -q); do
+    n=$(docker inspect -f '{{.Name}}' $c | tr -d /); img=$(docker inspect -f '{{.Config.Image}}' $c); pol=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' $c)
+    want=0; echo "$img $n" | grep -qiE "$STATEFUL_RE" && want=1
+    for x in "$@"; do [ "$x" = "$n" ] && want=1; done
+    echo "$img $n" | grep -qiE "netbird|wireguard|wg-|openvpn|tailscale|zerotier|frp|ipsec|vpn" && { echo "跳过 VPN/隧道容器 $n（停了可能失联）"; continue; }
+    [ $want = 1 ] || continue
+    if [ "$pol" = always ]; then echo "优雅停止有状态容器 $n (restart=always，最长等 300s)"; docker stop -t 300 $c >/dev/null && echo "$n" >> $K/stateful-stopped.txt
+    else echo "WARN: $n restart=$pol，docker stop 后不会自启 → 不手动停（建议 compose 里给它加 stop_grace_period）"; fi
+  done
+}
+start_stateful() { # post 结束时把 stop_stateful 停掉、还没被 docker 重启拉起的容器启动回来
+  [ -s $K/stateful-stopped.txt ] || return 0
+  while read -r n; do [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = true ] || { echo "启动之前优雅停止的容器 $n"; docker start "$n" >/dev/null; }; done < $K/stateful-stopped.txt
+  : > $K/stateful-stopped.txt
+}
 case "$1" in
 prep)
   M=${2:?需要 MIRROR}
@@ -210,18 +231,7 @@ reboot)
   NOSTOP=0; [ "$1" = --no-stop ] && { NOSTOP=1; shift; echo "--no-stop：不提前停止任何容器"; }
   # K8s 节点：先停 kubelet 并有序停止 pod 容器，否则 kubelet 会在关机途中把容器重新拉起
   [ $NOSTOP = 0 ] && systemctl is-active kubelet >/dev/null 2>&1 && bash "$(dirname "$0")/k8s.sh" stop
-  if [ $NOSTOP = 0 ] && command -v docker >/dev/null && docker info >/dev/null 2>&1; then
-    for c in $(docker ps -q); do
-      n=$(docker inspect -f '{{.Name}}' $c | tr -d /); img=$(docker inspect -f '{{.Config.Image}}' $c); pol=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' $c)
-      want=0; echo "$img $n" | grep -qiE "mysql|mariadb|postgres|mongo|redis|elasticsearch|opensearch|clickhouse|kafka|zookeeper|etcd|minio|rabbitmq|influx|tdengine|nacos" && want=1
-      for x in "$@"; do [ "$x" = "$n" ] && want=1; done
-      echo "$img $n" | grep -qiE "netbird|wireguard|wg-|openvpn|tailscale|zerotier|frp|ipsec|vpn" && { echo "跳过 VPN/隧道容器 $n（停了可能失联）"; continue; }
-      if [ $want = 1 ]; then
-        if [ "$pol" = always ]; then echo "优雅停止有状态容器 $n (restart=always，开机会自动拉起)"; docker stop -t 120 $c >/dev/null
-        else echo "WARN: $n restart=$pol，docker stop 后开机不会自启 → 不手动停，交给 docker.service 关机时优雅停止"; fi
-      fi
-    done
-  fi
+  [ $NOSTOP = 0 ] && stop_stateful "$@"
   sync; systemd-run --on-active=5 /usr/bin/systemctl reboot >/dev/null 2>&1 && echo "5 秒后重启。本机执行 remote.py HOST wait-ssh 等待；超时就去控制台 VNC/串口看（见 references/recovery.md）"
   ;;
 
@@ -247,6 +257,8 @@ post)
   clear_leapp_excludes
   rpm -qa | grep -E "^(leapp|python[23]?-leapp|snactor|elevate-release|leapp-upgrade|leapp-data|leapp-deps|leapp-repository|kernel-workaround)" | xargs -r rpm -e --nodeps
   rm -rf /var/lib/leapp/el*userspace /var/lib/leapp/scratch /root/tmp_leapp_py3 /etc/leapp/files /etc/yum.repos.d/ELevate.repo
+  # 下面的 dnf 事务可能升级 docker-ce/containerd → dockerd 重启，容器只给 10s 就被 SIGKILL：先优雅停有状态容器
+  stop_stateful
   oldk=$(rpm -qa 'kernel*' | grep -E "\.el${PREV}(_[0-9]+)?\.")
   [ -n "$oldk" ] && { echo "删除旧内核: $(echo $oldk | wc -w) 个包"; $PKG -y remove $oldk 2>&1 | tail -1; }
   # EL7 内核的 %preun 调用 new-kernel-pkg（EL8 上没有，exit 127）→ dnf 删不掉：不跑脚本强删，再清理 /boot 和启动项
@@ -299,6 +311,7 @@ post)
   if [ "$CUR" -ge 10 ] && grep -q "^#osup-bind# " /etc/fstab; then
     sed -i -E 's/^#osup-bind# //' /etc/fstab; systemctl daemon-reload; mount -a 2>&1 | head -3; echo "已恢复 fstab bind 挂载（#osup-bind#）"
   fi
+  start_stateful
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
   ;;

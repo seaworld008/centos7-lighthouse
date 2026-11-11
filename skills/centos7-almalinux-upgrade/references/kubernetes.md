@@ -42,6 +42,7 @@
 | `nfs-client-provisioner` ImagePullBackOff | 镜像 tag 是 `:latest` → 默认 `imagePullPolicy: Always`，quay.io 拉不到；节点上其实有镜像 | 改 `imagePullPolicy: IfNotPresent`（同步改用户保存的 manifest） |
 | `kubectl drain --force` 后少了 pod | 没有控制器管理的裸 pod 被删除且不会回来 | drain 前 `kubectl get pods -A -o json` 找 `ownerReferences` 为空的 pod，告诉用户 |
 | worker 被 drain 后剩下那台负载 300+ | 前两台 drain 的 pod 全挤到最后一台 | 资源不够时直接全部 cordon 而不是逐台 drain；反正要整体中断 |
+| 升级后某台节点的监控一直报“出方向丢包”（flannel.1 的 tx_dropped 大约每小时 +1） | 只有这台没在 sysctl 里禁 IPv6：flannel.1 有 IPv6 link-local 地址，内核发的 IPv6 组播在 VXLAN FDB 里没有条目，只能丢掉 | 和其它节点一样设 `net.ipv6.conf.all/default.disable_ipv6=1`（postfix 同时改 `inet_protocols = ipv4`）；观察 1~2 小时 tx_dropped 不再增加。`k8s.sh check` 会提示 |
 | master 8→9 进 emergency | fstab 里 bind 到 /sys 的条目（阿里云 `set_ecs_special.sh`） | 见 recovery.md B2；`hop.sh up` 已自动处理 |
 
 ## 5. 恢复后检查清单

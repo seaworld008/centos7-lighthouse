@@ -122,6 +122,26 @@ operator: agent
 - 处理：categraf 配置里写死旧 ident（`hostname = "$ip-app_01"`），重启 categraf，`categraf -test` 确认 `agent_hostname` 恢复旧值；平台上多出的新目标由用户删除。
 - 状态：promoted → `survey.sh`（主机名含非法字符 → MEDIUM）、`pitfalls.md` §4
 
+### 4.12 宿主机 MySQL 被 OOM 杀掉后不再启动（升级后第 3 天发现）
+- 阶段：升级后（第 3 天凌晨）
+- 现象：K8s 发版时新 pod 报 `Communications link failure` / `Connection refused`，A 机 MySQL 5.7（tarball，SysV）端口不在监听；`systemctl status mysql` 显示 `failed (Result: oom-kill)`，时间是凌晨 02:00（每日 mysqldump 备份开始的时刻）。停了 10 小时，直到发版才被发现。
+- 原因：EL7 时期给 unit 加过 `MemoryLimit=4G` drop-in。mysqld 匿名内存涨到 4G 被 memcg OOM 杀掉。EL7 上 mysqld_safe 会把 mysqld 重新拉起；EL9+ 的 systemd 默认 `OOMPolicy=stop`，内核杀掉一个进程就停掉整个 unit（mysqld_safe 一起停），SysV 生成的 unit 又是 `Restart=no`。
+- 处理：drop-in 改为 `MemoryMax=6G` + `OOMPolicy=continue` + `Restart=on-failure`，启动后从 K8s 节点验证端口可达。
+- 状态：promoted → `survey.sh`（设了内存上限但没设 OOMPolicy → MEDIUM）、`finalize.sh oom-policy`、`pitfalls.md` §7、`app-compat.md`（宿主机 MySQL 加 jemalloc：`[mysqld_safe] malloc-lib`，重启后一次全量备份峰值 2.9G，在 6G 上限内）
+
+### 4.13 MySQL 备份巡检（升级后第 3 天，大部分问题与升级无关、早就存在）
+- 阶段：升级后，用户要求"备份时不再 OOM、长期稳定"
+- 两台共 6 个 MySQL/MariaDB 实例（A 机：宿主机 5.7 + 两个容器；B 机：三个容器），5 个备份 cron 脚本。发现：
+  - A 机全库备份**每晚都在同一个库中止**（磁盘上 9 天的 full.sql 都是同样大小、结尾没有 `-- Dump completed`）：该库 47 张大写表名的表在 `lower_case_table_names=1` 下打不开，mysqldump 报 1146 退出，后面的库从没进过全量备份；cron 是 `>/dev/null 2>&1`，没人知道。
+  - B 机 MySQL 5.7 的备份只覆盖 2 个库（实例里有 29 个），MariaDB 和 A 机的一个小容器库没有备份。
+  - 脚本把密码写在命令行；同一批库全量 + 逐库各 dump 一遍；保留天数和注释不一致。
+  - 排查时还踩到：EL10 的 mysqldump 8.4 和 tarball 自带的 5.7 都会读 `/etc/my.cnf` 的 `[mysqldump]` 段，里面的 user/password 让 `MYSQL_PWD` 不生效 → 一直 Access denied。
+- 处理：
+  - 统一换成 `mysql-backup.sh`：一次只备份一个实例、逐库 gzip、校验结尾和退出码、导出账号、14 天保留、`--check`；坏库排除并交给用户决定。实测两台分别 81 秒、2.5 分钟；在临时库里恢复一个库，表数和校验和一致。
+  - categraf exec 上报 `mysql_backup_ok/age_hours/size_mb`，夜莺两条告警（失败、超过 26 小时没有新备份）。
+  - 测试环境调优：5 个实例 `sync_binlog=100`、容器实例 `innodb_flush_log_at_trx_commit=2`（在线生效并写回配置）；B 机 MySQL 5.7 容器限制 3G 而 buffer pool 2G，备份后涨到 2.58G → 在线缩到 1.5G、max_connections 2000→500（历史最大 54）。
+- 状态：promoted → `scripts/mysql-backup.sh`、`survey.sh`（cron 里的 mysqldump 脚本 → INFO）、`pitfalls.md` §7、`app-compat.md` 宿主机数据库
+
 ## 5. 结果对比（verify.sh，最终重启后）
 | 检查项 | 升级前 | 升级后 | 备注 |
 |---|---|---|---|

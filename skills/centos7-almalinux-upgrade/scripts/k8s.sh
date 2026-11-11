@@ -145,6 +145,8 @@ check)
     echo "k8s 容器: running $r / 全部 $t"
     docker ps --filter name=k8s_ --format '{{.Names}} {{.Status}}' | grep -vE "k8s_POD_" | awk '{print $1}' | sed -E 's/^k8s_([^_]+)_([^_]+)_([^_]+)_.*/\3\/\2 (\1)/' | sort | head -80 | tr '\n' ' '; echo
   fi
+  # flannel.1 上有 IPv6 地址：IPv6 组播在 VXLAN FDB 里没有条目 → tx_dropped 每小时涨一点 → 监控"出方向丢包"告警（真实踩坑：只有一台节点没禁 IPv6）
+  ip -6 addr show dev flannel.1 2>/dev/null | grep -q inet6 && echo "WARN flannel.1 有 IPv6 地址（tx_dropped=$(cat /sys/class/net/flannel.1/statistics/tx_dropped 2>/dev/null)）：和其它节点一样禁用 IPv6（sysctl net.ipv6.conf.all/default.disable_ipv6=1），见 kubernetes.md"
   echo "-- kubelet 最近 5 分钟的错误（去重）:"
   journalctl -u kubelet --since "-5min" --no-pager 2>/dev/null | grep -E " E[0-9]{4} " | sed -E 's/.*\] //' | cut -c1-200 | sort | uniq -c | sort -rn | head -8
   ;;

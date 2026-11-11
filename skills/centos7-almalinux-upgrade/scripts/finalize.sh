@@ -11,6 +11,7 @@
 #   bash finalize.sh redis-valkey            redis → valkey（EL10 无 redis）：迁移 dump/aof、启用 valkey、redis-cli 兼容链接
 #   bash finalize.sh manual-procs <DIR>      把升级前手工启动的进程（backup.sh 记录在 <BACKUP>/manual-procs）生成 systemd 服务
 #   bash finalize.sh sysv-units              为仍靠 SysV init 脚本启动的服务生成原生 systemd unit（防止将来 systemd 去掉 sysv 支持）
+#   bash finalize.sh oom-policy              设了内存上限的 unit：MemoryLimit→MemoryMax，加 OOMPolicy=continue + Restart=on-failure（EL9+ 默认 OOMPolicy=stop）
 export LC_ALL=C
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 K=/root/os-upgrade-kit/bak; mkdir -p $K
@@ -142,5 +143,23 @@ manual-procs) # 升级前手工从 SSH 会话启动（nohup ... &）的进程，
   systemctl daemon-reload
   echo "检查 /etc/systemd/system/osup-*.service 后：systemctl enable --now <name>（LANG=zh_CN.GB18030 等需要 glibc-langpack-zh）" ;;
 
-*) sed -n '2,15p' "$0";;
+oom-policy) # EL7 上内存超限只杀一个进程（mysqld_safe 等守护会拉起来）；EL9+ 默认 OOMPolicy=stop 停掉整个 unit，SysV 生成的 unit 又是 Restart=no（真实踩坑：MySQL 停了 10 小时）
+  D=${SYSTEMD_DIR:-/etc/systemd/system}; n=0
+  for f in "$D"/*.service "$D"/*.service.d/*.conf; do
+    [ -e "$f" ] || continue
+    grep -qE '^(MemoryLimit|MemoryMax)=' "$f" || continue
+    u=${f#"$D"/}; u=${u%%.d/*}
+    grep -qsE '^OOMPolicy=' "$D/$u" "$D/$u".d/*.conf && continue
+    cp -a "$f" "$K/$(echo "$f" | tr / _).bak-oom-policy"
+    sed -i -E 's/^MemoryLimit=/MemoryMax=/' "$f"     # cgroup v2 下 MemoryLimit= 已废弃
+    mkdir -p "$D/$u.d"; o="$D/$u.d/90-oom-policy.conf"
+    printf '# finalize.sh oom-policy: EL9+ 默认 OOMPolicy=stop，OOM 杀一个进程就停掉整个 unit\n[Service]\nOOMPolicy=continue\n' > "$o"
+    # 没设 Restart 的（SysV 生成的 unit 默认 Restart=no）补上 on-failure
+    grep -qsE '^Restart=' "$D/$u" "$D/$u".d/*.conf "/usr/lib/systemd/system/$u" || printf 'Restart=on-failure\nRestartSec=10\n' >> "$o"
+    echo "已修改 $u：$(cat "$f" "$o" | grep -E '^(MemoryMax|OOMPolicy|Restart)=' | tr '\n' ' ')（原文件备份在 $K）"; n=$((n+1))
+  done
+  [ $n -gt 0 ] && { systemctl daemon-reload 2>/dev/null; echo "已 daemon-reload；内存上限按实际占用调整（例如 MySQL：buffer pool + 连接数 × 每连接缓冲，留余量）"; }
+  [ $n = 0 ] && echo "没有需要修改的 unit" ;;
+
+*) sed -n '2,16p' "$0";;
 esac
