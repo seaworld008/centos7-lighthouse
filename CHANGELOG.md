@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-13
+
+华为云三台生产机并行升级的经验（报告：`field-reports/2026-11-12-huawei-php-docker-nfs-frps-x3.md`）：一台 s3 到 10.2；两台 **c9** 的 EL10 内核在升级 initramfs 里探测 ata_piix 挂死，换盘改 grubenv 退回 9.8，无数据丢失。
+
+### Added
+- `scripts/rescue-grubenv.sh`：卡在升级 initramfs、抢不到 GRUB 时，在同可用区救援机上把故障机系统盘的默认启动项改回旧内核；可作为 user data 注入，救援机无需登录。`recovery.md` 新增 F 节完整流程。（verified-on-real-run）
+- `survey.sh`：华为云从元数据取规格；"c9 + PIIX3 IDE"报 HIGH（建议停在 AlmaLinux 9），其它隐藏 CPU 型号的规格报 INFO。（verified-on-real-run：只读运行于 c9 报 HIGH、s3 不报）
+- `hop.sh prep`（目标 ≥9）：把当前 SSH 来源 IP 写入 `PerSourcePenaltyExemptList`，避免 OpenSSH 9.9 的 PerSourcePenalties 在 wait-ssh 探测后锁住操作者。（手工方式 verified-on-real-run；脚本化 untested）
+- `hop.sh reboot`：fstab 的 NFS 被 `#osup-nfs#` 注释时（非 K8s 主机）mask docker；`k8s.sh nfs-on` 在 NFS 全部挂上后 unmask 并启动 docker。（手工方式 verified-on-real-run；脚本化 untested）
+
+### Fixed
+- `finalize.sh compose-wrapper`：没有 compose v2 插件时不再替换 docker-compose（EL7 + Docker 19.03 上会把 docker-compose 弄坏）；冒烟测试覆盖。
+
+### Docs
+- `pitfalls.md`：c9 上 EL10 ata_piix 挂死；升级后 docker 被重新 enable、容器抢在 NFS 前启动（用 mask）；宿主机卸载 NFS 不影响容器内挂载（下载期间不停业务）；pam_tally2 只在未引用的 `-ac` 文件里；OpenSSH 9.9 PerSourcePenalties；下载慢先测速（镜像侧临时限速，代理反而更慢）；vector 停机积压后追赶时 OOM 无限重启。
+- `cloud-providers.md` 华为云：c9 规格识别与建议、敏感操作保护（短信验证码）、VNC 重连与 GRUB、EVS 挂系统盘的坑。
+- `SKILL.md`：c9 建议只升到 9；工具表加入 rescue-grubenv.sh。
+
 ## [0.5.0] - 2026-11-11
 
 升级后运维阶段的经验（升级后第 2~3 天在已升级的机器上发现）：宿主机 MySQL 被 OOM 后整个服务停了 10 小时、老备份脚本静默失败了几个月、K8s 节点 IPv6 导致 flannel 丢包。见 2026-11-08 报告 4.12/4.13、2026-11-07 报告 4.13。

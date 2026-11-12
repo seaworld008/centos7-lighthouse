@@ -19,10 +19,14 @@
   - 页面太矮看不到底部 → 点"全屏模式"再操作；看不到就滚动页面右侧
   - 长时间不动会 `Server disconnected (Client timeout)` → 重新打开 VNC 链接
   - 登录提示符需要输入密码时，请用户自己在 VNC 里登录（Claude 不代输密码）；initramfs 紧急 shell 无需密码
-- **镜像源**：`https://repo.huaweicloud.com` 实测频繁 429 限流，优先用阿里云公网镜像。
+- **镜像源**：`https://repo.huaweicloud.com` 实测频繁 429 限流，优先用阿里云公网镜像。阿里云镜像偶尔也会对单机限速到几百 KB/s（多台并发时尤甚），换镜像前先测速。
 - **agent**：uniagent/telescope（主机监控，systemd 原生 unit）、ICAgent（cron mstart.sh + SysV）、hostguard（HSS，SysV）、CloudResetPwdUpdateAgent / CloudResetPwdAgent（一键重置密码，SysV，自带 JRE）。AlmaLinux 10.2 下 SysV 仍可启动；坏了的按华为文档重装。
 - 网卡：镜像常预置 ifcfg-eth0~eth4，9→10 时一起 `nmcli connection migrate`。
-- sys_vendor 显示为 "OpenStack Foundation"。
+- sys_vendor：老规格显示 "OpenStack Foundation"；c9 等新规格显示 "Huawei Cloud"，CPU 型号被隐藏为 "General Purpose Processor"。规格名可从元数据取：`curl -s http://169.254.169.254/openstack/latest/meta_data.json` 的 `meta."metering.resourcespeccode"`（如 `c9.xlarge.2.linux`）。
+- ★ **c9 规格不要直接 9→10**：EL10 内核在升级 initramfs 里探测 ata_piix 挂死（见 pitfalls 9→10），建议停在 AlmaLinux 9；s3 等老规格实测正常。survey 会提示。
+- ★ **操作保护**：账号开了"敏感操作保护"时，强制关机/重启、删除云服务器等需要手机短信验证码，验证后约 15 分钟内同类操作免验证。提前告诉用户留在电脑前；Claude 不代输验证码。
+- VNC：强制重启/开机后控制台要几秒才能重连，抢不到 GRUB 菜单；同一个 VNC 页面换 hash 地址重进（先进实例列表再进 VNC）才会重连。区域不在当前区域时，实例列表搜不到（如北京一 / 北京四）。
+- 救援：同可用区内可以把系统盘卸下挂到别的机器上修改（recovery.md F）。
 
 ## AWS EC2
 - **快照**：EBS Snapshot 或直接创建 AMI（推荐，含所有卷）。

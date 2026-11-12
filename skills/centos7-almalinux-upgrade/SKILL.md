@@ -17,6 +17,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 - 宿主机 rpm 装的数据库要跨多个大版本（MariaDB 5.5→10.11、PostgreSQL 9.2→16）且数据量大
 - 非 x86_64、btrfs、系统盘极小且无法扩容
 - CPU 不支持 x86-64-v3（AlmaLinux 10 标准版跑不了；可以只升到 9，或用 AlmaLinux 10 的 x86_64_v2 变体）
+- 华为云 c9 规格（survey 报 HIGH）：EL10 内核在升级 initramfs 里探测 ata_piix 挂死，建议只升到 9（升 9 本身没问题）；万一已经卡住按 `references/recovery.md` F 换盘改启动项
 - 业务本身就是容器化的、配置都在 compose/k8s 里——新建机器重新部署往往比原地升级更快
 
 拿不准时把判断依据告诉用户，让用户选。
@@ -39,6 +40,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `fleet_summary.py` | 本机运行：汇总多台 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批） |
 | `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务、`oom-policy`（EL9+ 默认 OOMPolicy=stop） |
 | `mysql-backup.sh` | 收尾后可选：替换老的 mysqldump cron 脚本——宿主机/容器 MySQL 逐库备份 + 校验 + `--check`/`--metrics` 监控 |
+| `rescue-grubenv.sh` | 救援：在同可用区的救援机上（可作为 user data，无需登录）把故障机系统盘的默认启动项改回旧内核，用于卡在升级 initramfs、抢不到 GRUB 的情况 |
 | `k8s.sh` | K8s 节点：`backup`（etcd 快照/配置/二进制/pod 列表，自动 `pin` 版本）、`stop`、`nfs-off`/`nfs-on`、`nm`、`fix`、`check`（含 flannel.1 IPv6 丢包提示）、`pods`（与升级前对比）、`jvm-maxram`（cgroup v2 下老 JDK 的 OOM） |
 
 本机在 Windows Git Bash 下调用时，`remote.py` 已自动处理 MSYS 把 `/root/...` 改写成 `C:/Program Files/Git/root/...` 的问题。

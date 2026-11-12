@@ -102,6 +102,17 @@ prep)
   rewrite_mirrors "$M" /etc/leapp/files/leapp_upgrade_repositories.repo /etc/leapp/files/vendors.d/*.repo
   disable_noise_sections /etc/leapp/files/vendors.d/*.repo
   pipfix
+  # EL9.6+/EL10 的 OpenSSH 9.9 有 PerSourcePenalties：重启后 wait-ssh 反复探测端口（连上不认证就断）算 noauth 惩罚，
+  # 经 VPN/跳板 NAT 时所有操作同一个源 IP，会被拒 "Not allowed at this time" 好几分钟（真实踩坑）→ 把当前 SSH 来源 IP 豁免
+  src=${SSH_CLIENT%% *}
+  if [ "$TGT" -ge 9 ] && [ -n "$src" ] && [ -d /etc/ssh ]; then
+    pf=/etc/ssh/sshd_config.d/05-osup-penalty-exempt.conf
+    if [ ! -f "$pf" ]; then
+      mkdir -p /etc/ssh/sshd_config.d; echo "PerSourcePenaltyExemptList $src" > "$pf"
+      if sshd -t 2>/dev/null; then echo "sshd：$src 写入 PerSourcePenaltyExemptList（$pf；当前 sshd 若不读该目录/不认识该参数，升级后生效）"
+      else rm -f "$pf"; echo "WARN: 当前 sshd 读取 sshd_config.d 但不认识 PerSourcePenaltyExemptList，未写入；到 EL9.6+ 后重跑 hop.sh prep"; fi
+    fi
+  fi
   # EL9 起 libcrypt.so.1 拆到 libxcrypt-compat（默认不装）：自编译 nginx/mysqld 等依赖它，升级后开机起不来（真实踩坑）
   # → 让 leapp 在升级事务里一起装上（/etc/leapp/transaction/to_install）
   if [ "$TGT" -ge 9 ]; then
@@ -232,6 +243,12 @@ reboot)
   # K8s 节点：先停 kubelet 并有序停止 pod 容器，否则 kubelet 会在关机途中把容器重新拉起
   [ $NOSTOP = 0 ] && systemctl is-active kubelet >/dev/null 2>&1 && bash "$(dirname "$0")/k8s.sh" stop
   [ $NOSTOP = 0 ] && stop_stateful "$@"
+  # fstab 的 NFS 被 k8s.sh nfs-off 临时注释时（非 K8s 主机）：mask docker。只 disable 不够——升级事务里 docker-ce 被升级后
+  # 会重新启用，开机时容器抢在 NFS 恢复之前启动，业务目录绑到空的本地目录（真实踩坑）。k8s.sh nfs-on 挂好 NFS 后再 unmask 启动
+  if grep -q '^#osup-nfs# ' /etc/fstab 2>/dev/null && ! systemctl cat kubelet >/dev/null 2>&1 && systemctl cat docker.service >/dev/null 2>&1; then
+    systemctl mask docker.service docker.socket >/dev/null 2>&1 && touch "$K/docker-masked-for-nfs" && \
+      echo "NFS 已临时下线：docker 已 mask，重启后先执行 k8s.sh nfs-on（挂好 NFS 再 unmask/启动 docker）"
+  fi
   sync; systemd-run --on-active=5 /usr/bin/systemctl reboot >/dev/null 2>&1 && echo "5 秒后重启。本机执行 remote.py HOST wait-ssh 等待；超时就去控制台 VNC/串口看（见 references/recovery.md）"
   ;;
 

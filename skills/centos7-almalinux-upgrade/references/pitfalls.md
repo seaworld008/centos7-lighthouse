@@ -30,6 +30,13 @@
 **★ 远程执行 `yum check` 等极慢命令导致本地工具超时**
 - 处理：不需要的检查别跑；需要的放后台。
 
+**★ 升级到 EL9.8/EL10 后 SSH 突然连不上，banner 只有 `Not allowed at this time`**
+- 原因：OpenSSH 9.8+ 的 `PerSourcePenalties`。重启后 `wait-ssh` 反复探测端口（连上不认证就断）被记为 noauth 惩罚，同一来源 IP 被拒几分钟、反复探测还会延长；经 VPN/跳板 NAT 时所有操作都是同一个源 IP，一台机器上的探测就能把你锁在外面。
+- 处理：停止探测等几分钟就会自动解除；`hop.sh prep`（目标 ≥9）会把当前 SSH 来源 IP 写进 `/etc/ssh/sshd_config.d/05-osup-penalty-exempt.conf` 的 `PerSourcePenaltyExemptList`（8→9 时 leapp 会给 sshd_config 加 Include，升级后自动生效）。
+
+**★ 下载期间换"代理"不一定更快**
+- 实测（华为云）：三台机器同时从阿里云镜像下载时每台只有 250~350KB/s，同一时间单台测速却有 14~16MB/s——是镜像侧的临时限速，过一会儿就恢复；经 VPC 内另一台机器（mihomo 代理）转发反而只有约 380KB/s。先在本机 `curl -o /dev/null -w '%{speed_download}'` 对比几个镜像，再决定换不换；leapp 的 dnf 下载日志按包写，大包（linux-firmware 600MB+）下载时日志会停很久，看 `/var/lib/leapp/el*userspace/var/cache/dnf` 下文件是否在变大。
+
 ## 2. EL7 准备阶段
 
 **CentOS 7 官方源已下线 / repo 文件重复定义（"Repository base is listed more than once"）**
@@ -148,6 +155,8 @@
 | ★ preupgrade 卡在 dnf_transaction_check 几十分钟 | EPEL 走 metalink 国外镜像，改国内 baseurl（hop.sh prep） |
 | `Packages not signed by Red Hat`（hostguard、kubectl、自编译包…） | 不是阻断；但升级后这些包保持 EL7 版本，逐个确认还能用 |
 | `Difference in Python versions` / `GRUB2 core will be updated` | 提示，无需处理 |
+| ★ `The pam_tally2 pam module(s) no longer available`（system-auth-ac、password-auth-ac） | 先看这两个 `-ac` 文件有没有被引用：`grep -l auth-ac /etc/pam.d/*`。实测 system-auth/password-auth 早已是独立文件、`-ac` 没人引用，注释掉其中的 `pam_tally2` 行即可，登录行为不变；真在用的要改成 `pam_faillock`（改 PAM 前留一个已登录的会话） |
+| ★ `Use of NFS detected`，但不想为了几十分钟的下载停业务 | 注释 fstab 的 NFS（`k8s.sh nfs-off`，非 K8s 主机也能用）后在**宿主机**卸载：容器的 bind mount 在自己的挂载命名空间里（rprivate），宿主机卸载后容器里的 NFS 照常读写（实测 8 个容器写入正常），leapp 检查也通过。重启前 `hop.sh reboot` 会 mask docker，重启后 `k8s.sh nfs-on` 先挂 NFS 再放开 docker |
 | /var 空间不足 | leapp 需要约 3~5GB；清 docker 无用镜像（先确认）、日志、yum 缓存 |
 | ★ preupgrade 0 阻断，`leapp upgrade` 却在 `dnf_package_download` 失败：`Transaction test error: file /usr/lib64/libwebp.so.7 from install of libwebp-1.0.0 conflicts with file from package libwebp7-1.0.3-2.el7.remi`（还有 libzip5） | 宿主机 PHP 早已迁走（容器化），Remi 的兼容库（libwebp7/libzip5/libicu69/oniguruma5php/gd3php/ImageMagick6-libs）留着没人用，和 EL8 的同名 so 冲突。preupgrade 的事务检查查不出来，下载完才报。确认没有非 Remi 包依赖后删除（`prep-el7.sh inhibitors` 第 5 步自动做；宿主机还有 Remi 的 php 时不动） |
 
@@ -185,6 +194,12 @@
 | ★ `kernel drivers which are no longer maintained`（nft_compat、ip_set） | 提示；fail2ban/docker 仍可用，升级后验证 |
 | CPU 不满足 x86-64-v3 | AlmaLinux 10 标准版无法启动！survey 会报 BLOCKER；用 x86_64_v2 变体或停在 9 |
 | ★ 事务里会删掉 java-1.8.0/11/17-openjdk、redis、dhcp-client 等 | 用 `hop.sh report` 看"将被删除的包"：宿主机直接跑 Java 8/11/17 程序的要改用容器或自带 JDK；NetworkManager 配了 `dhcp=dhclient` 的要先改回 internal |
+
+**★★ 华为云 c9 规格：9→10 重启后卡在升级 initramfs，`dracut-initqueue: Timed out while waiting for udev queue to empty` 无限循环**
+- 现象：重启后 SSH 不回来；VNC 里约 369 秒出现 hung task，调用栈 `init_module_from_file → do_init_module → async_synchronize_cookie_domain`，之后每 2 分钟一行 udev 超时。关机时 `systemd-udevd: 0000:00:01.1: Worker ... is taking a long time`，0000:00:01.1 是模拟的 PIIX3 IDE 控制器（8086:7010，驱动 ata_piix）；SIGKILL 也杀不掉，Ctrl+Alt+Del 重启不了。
+- 原因：AlmaLinux 10 内核（6.12）在 c9（擎天）虚拟硬件上探测 ata_piix 时挂死，其它驱动的 udev worker 都在等它。卡在挂载根分区之前，**系统盘上的东西一点没动**。同一晚升级的 s3 规格（同样有 PIIX3）正常，EL9 内核在 c9 上也正常。
+- 处理：leapp 把升级启动项设成了**持久默认项**（grubenv `saved_entry`），强制重启还会进去；华为云强制重启后 VNC 要几秒才重连，5 秒的 GRUB 菜单抢不到。可靠的办法是换盘改 grubenv：见 `recovery.md` F（`scripts/rescue-grubenv.sh`）。改回 EL9 后业务原样恢复。
+- 预防：`survey.sh` 对"华为云 c9 + PIIX3"报 HIGH。这类机器建议停在 AlmaLinux 9（支持到 2032）；要上 10，先在同规格测试机验证（候选办法：EL9 上把 ata_piix/ata_generic 加入黑名单并在升级启动项加 `modprobe.blacklist=ata_piix rd.driver.blacklist=ata_piix`，**未验证**）。
 
 ## 6. 每跳重启后
 
@@ -224,6 +239,10 @@
 **★ 旧内核、leapp 包、/var/lib/leapp（3GB+）残留**
 - 处理：`hop.sh post` 统一清理，并删失效的 BLS 启动项。
 
+**★ 依赖 NFS 的容器在 NFS 恢复前就起来了，业务目录绑到空的本地目录（`systemctl disable docker` 没用）**
+- 原因：升级事务里 docker-ce 被升级，包脚本把 docker 重新 enable，开机就启动；`restart=always` 的容器把 `/data/xxx`（此时还是 NFS 挂载点下的空目录）绑进去，期间写入的日志落在本地盘、被随后挂上的 NFS 盖住。
+- 处理：重启前 `systemctl mask docker.service docker.socket`（`hop.sh reboot` 在 fstab 有 `#osup-nfs#` 时自动做）；重启后 `k8s.sh nfs-on` 挂好 NFS 再 unmask/启动。已经中招：挂上 NFS 后 `docker restart` 相关容器；被盖住的本地文件可 `mount --bind / /mnt/x` 后在 `/mnt/x/<挂载点>` 看到。完成后给 docker 加 drop-in `[Unit] RequiresMountsFor=/data/xxx`，以后普通重启也不会抢跑。
+
 **★ cloud-init 服务 failed（203/EXEC）**
 - 原因：EL7 上是 pip/egg 装的 py2 cloud-init。
 - 处理：长期运行的机器上 cloud-init 作用有限，可 `touch /etc/cloud/cloud-init.disabled`；AWS 等依赖它的环境改装新系统 cloud-init 包（见 cloud-providers.md）。
@@ -237,6 +256,11 @@
 - 预防：compose 里给 GitLab 加 `stop_grace_period: 5m`；`hop.sh reboot` 和 `hop.sh post` 现在会先优雅停止有状态容器（GitLab/Gitea/Nexus/SonarQube 等已加入名单，最长等 300s），post 结束再启动回来；survey 对没设 stop_grace_period 的 GitLab 容器报 MEDIUM。
 
 ## 7. 升级后应用层
+
+**★ 日志采集器（vector）升级后无限重启：`Memory cgroup out of memory: Killed process (vector)`**
+- 现象：容器 `RestartCount` 几分钟涨到 200+；`docker inspect` 的 `OOMKilled` 可能显示 false，`journalctl -k` 里能看到 memcg OOM。
+- 原因：停机几小时积压了日志，重启后 vector 要追赶 backlog，内存远高于平时（实测 0.58 版追赶时约 0.9GiB），而容器 `mem_limit: 512m` 是按平时用量定的；每次被杀都没来得及提交 checkpoint，于是永远追不上。
+- 处理：`docker update --memory 1536m --memory-swap 1536m <容器>` 立即生效（不重建），同时改 compose 文件；追平后再按实际用量决定是否调回。同类问题适用于 filebeat/fluent-bit 等有积压的采集器。
 
 **★ 服务被 OOM 杀掉后整个 unit 停掉、不再启动（MySQL 停了 10 小时才发现）**
 - 现象：`systemctl status` 显示 `failed (Result: oom-kill)`；EL7 上同样超限时服务会自己恢复。
@@ -254,6 +278,7 @@
 **★ `docker-compose up -d` 报 `KeyError: 'ContainerConfig'`，而且旧容器已被改名为 `<短id>_<名字>`**
 - 原因：docker-compose v1.29 与 Docker ≥ 25 不兼容，失败前已经重命名了旧容器。
 - 处理：`docker compose`（v2）重建；先 `docker rm` 那个改名后的残留容器（确认它没有数据卷！）；`finalize.sh compose-wrapper` 让 `docker-compose` 命令转发到 v2。
+- ★ 别在 EL7 上就跑 `compose-wrapper`：Docker 19.03 没有 compose v2 插件，替换后 `docker-compose` 直接不可用（真实踩坑）。脚本现在会先确认 `docker compose version` 可用，不可用就保留原文件并退出；等 docker-ce 升级到带插件的版本再做。
 
 **★ 删掉"没用"的 PHP 后某站点从 200 变 404**
 - 教训：组件和站点的对应关系要在删之前告诉用户（nginx -T 里哪些 server 用 fastcgi_pass）。由用户决定站点去留。
