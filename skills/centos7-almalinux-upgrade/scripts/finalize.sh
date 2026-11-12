@@ -23,7 +23,11 @@ compose-wrapper)
   if [ -n "$f" ] && ! grep -q "exec docker compose" "$f" 2>/dev/null; then
     v=$("$f" version --short 2>/dev/null); case "$v" in 1.*) cp -a "$f" "$K/docker-compose-$v"; echo "备份 v$v → $K";; *) echo "docker-compose 不是 v1（$v），不处理"; exit 0;; esac
   else f=/usr/local/bin/docker-compose; fi
-  docker compose version >/dev/null 2>&1 || dnf -y install docker-compose-plugin >/dev/null 2>&1
+  docker compose version >/dev/null 2>&1 || { has_dnf=$(command -v dnf || command -v yum); $has_dnf -y install docker-compose-plugin >/dev/null 2>&1; }
+  # 没有 compose v2 插件时绝不能替换（真实踩坑：EL7 上 docker 19.03 没有插件，替换后 docker-compose 直接不可用）
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "!! 'docker compose'（v2 插件）不可用：保留原 docker-compose，不做替换。升级到带插件的 docker-ce 后再执行本命令"; exit 1
+  fi
   printf '#!/bin/sh\n# docker-compose v1 与 Docker>=25 不兼容（KeyError: ContainerConfig），转发到 Compose v2 插件\nexec docker compose "$@"\n' > "$f"; chmod 755 "$f"
   docker-compose version ;;
 

@@ -87,6 +87,12 @@ if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
   printf 'PATH=/usr/bin:/bin\nLANG=en_US.UTF-8\nSECRET=x\n' > $W/mp/123.environ
   t "finalize.sh manual-procs 生成 systemd 服务（不带无关环境变量）" bash -c "bash '$K/finalize.sh' manual-procs $W/mp >/dev/null 2>&1; f=/etc/systemd/system/osup-demo-svc.service; grep -q 'ExecStart=/usr/bin/java \"-Xmx512m\" \"-jar\" \"app.jar\"' \$f && grep -q 'WorkingDirectory=/data/demo/svc' \$f && ! grep -q SECRET \$f"
   rm -f /etc/systemd/system/osup-demo-svc.service
+  # compose-wrapper：没有 compose v2 插件时必须保留原 docker-compose（真实踩坑：EL7 docker 19.03）
+  mkdir -p /usr/local/sbin /usr/local/bin
+  for b in docker dnf yum; do [ -e /usr/local/sbin/$b ] || { printf '#!/bin/sh\nexit 1\n' > /usr/local/sbin/$b; chmod 755 /usr/local/sbin/$b; echo $b >> /tmp/fake-bins; }; done
+  printf '#!/bin/sh\necho 1.29.2\n' > /usr/local/bin/docker-compose; chmod 755 /usr/local/bin/docker-compose
+  t "finalize.sh compose-wrapper 无 v2 插件时不替换" bash -c "! bash '$K/finalize.sh' compose-wrapper >/dev/null 2>&1; grep -q 'echo 1.29.2' /usr/local/bin/docker-compose"
+  rm -f /usr/local/bin/docker-compose; for b in $(cat /tmp/fake-bins 2>/dev/null); do rm -f /usr/local/sbin/$b; done; rm -f /tmp/fake-bins
 fi
 if [ "$(rpm -E %rhel 2>/dev/null)" = 7 ]; then
   t "prep-el7.sh usage on EL7"   bash -c "bash '$K/prep-el7.sh' | grep -q 'prep-el7.sh repos'"

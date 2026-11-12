@@ -66,6 +66,17 @@ clearInterval(window.__k); rfb.sendKey(0xff0d);   // 回车
 - swap-openssh.sh 失败会自动用旧 sshd 兜底；检查 `/root/os-upgrade-kit/ossh-swap/swap.log`。
 - 控制台登录后：`/usr/sbin/sshd -t` 看配置错误；`systemctl status sshd`；必要时 `/root/os-upgrade-kit/ossh-swap/old-bin/sshd -f /etc/ssh/sshd_config`（9.x 旧版本需加 `-o SshdSessionPath=/root/os-upgrade-kit/ossh-swap/old-bin/sshd-session`）。
 
+## F. ★ 卡在升级 initramfs、抢不到 GRUB 菜单：换盘改默认启动项
+
+适用：重启进 leapp 升级环境后挂死（如华为云 c9 上 EL10 内核探测 ata_piix），**还没开始装包**，系统盘内容没变；但 leapp 把升级项设成了持久默认（grubenv 的 `saved_entry`），强制重启还会进去，而 VNC 在强制重启后要几秒才重连，抢不到 5 秒的 GRUB 菜单（实测多次失败；Ctrl+Alt+Del 也会因为卡死的进程关不了机）。
+
+1. 强制关机（华为云开了"操作保护"时需要用户输入短信验证码，请用户操作）。
+2. 云硬盘控制台：卸载故障机的系统盘。
+3. 同一可用区找一台救援机：已有机器（只热挂一块盘，不影响它）或新建一台按需计费的小规格机器。新建时把 `scripts/rescue-grubenv.sh` 作为"实例自定义数据（user data）"，登录方式选"创建后设置"——不需要任何密码。
+4. 把故障机的系统盘以**数据盘**挂到救援机。有 user data 的救援机会自动找到带 `*-upgrade.*.conf` 的分区，把 `saved_entry` 改成上一个大版本的内核，备份原 grubenv，卸载，并在 VNC 控制台打印 `OSUP: DONE ... saved_entry=...` 和 `SAFE TO DETACH`；已有机器上手工执行 `bash rescue-grubenv.sh`。xfs 克隆盘 UUID 相同时脚本会用 `nouuid` 挂载。
+5. 从救援机卸载，**以系统盘挂回**故障机（华为云 EVS 列表页挂 SCSI 系统盘可能一直报"未挂载系统盘"，换到 ECS 详情页 → 磁盘 → 挂载磁盘，磁盘属性选"系统盘"），开机。
+6. 回到旧系统后：恢复业务（NFS 主机先 `k8s.sh nfs-on`）；`grubby --remove-kernel=/boot/vmlinuz-upgrade.x86_64` 删掉升级启动项，防止以后误入；删除救援机。
+
 ## E. 回滚
 
 快照回滚是唯一完整的回滚。回滚前告诉用户：快照之后产生的业务数据（数据库写入、上传文件）会丢失，数据盘是否一起回滚由用户决定。

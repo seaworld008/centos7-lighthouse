@@ -49,6 +49,13 @@ nfs-on)
   grep -q "^#osup-nfs# " /etc/fstab && { sed -i -E 's/^#osup-nfs# //' /etc/fstab; echo "fstab NFS 已恢复"; }
   rpm -q nfs-utils >/dev/null 2>&1 || dnf -y install nfs-utils 2>&1 | tail -1
   mount -a -t nfs,nfs4 2>&1; awk '($3=="nfs"||$3=="nfs4") {print "已挂载 "$1" → "$2}' /proc/mounts | grep -v kubelet
+  # hop.sh reboot 在 NFS 下线时 mask 了 docker（非 K8s 主机）：fstab 里的 NFS 全部挂上才放开并启动
+  if [ -f "$K/docker-masked-for-nfs" ]; then
+    miss=$(awk '$1 !~ /^#/ && ($3=="nfs"||$3=="nfs4") {print $2}' /etc/fstab | while read -r m; do mountpoint -q "$m" || echo "$m"; done)
+    if [ -n "$miss" ]; then echo "!! 这些 NFS 还没挂上，docker 保持 mask：$miss"
+    else systemctl unmask docker.service docker.socket >/dev/null 2>&1; systemctl enable --now docker.socket docker.service >/dev/null 2>&1
+      rm -f "$K/docker-masked-for-nfs"; echo "NFS 已全部挂上：docker 已 unmask 并启动（$(systemctl is-active docker)）"; fi
+  fi
   ;;
 nm) nm_unmanaged; nmcli -t -f DEVICE,STATE dev status 2>/dev/null | grep -vE ":unmanaged$" ;;
 pin) pin; grep -H "^exclude=" /etc/yum.repos.d/*.repo 2>/dev/null ;;
