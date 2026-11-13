@@ -196,10 +196,11 @@
 | ★ 事务里会删掉 java-1.8.0/11/17-openjdk、redis、dhcp-client 等 | 用 `hop.sh report` 看"将被删除的包"：宿主机直接跑 Java 8/11/17 程序的要改用容器或自带 JDK；NetworkManager 配了 `dhcp=dhclient` 的要先改回 internal |
 
 **★★ 华为云 c9 规格：9→10 重启后卡在升级 initramfs，`dracut-initqueue: Timed out while waiting for udev queue to empty` 无限循环**
-- 现象：重启后 SSH 不回来；VNC 里约 369 秒出现 hung task，调用栈 `init_module_from_file → do_init_module → async_synchronize_cookie_domain`，之后每 2 分钟一行 udev 超时。关机时 `systemd-udevd: 0000:00:01.1: Worker ... is taking a long time`，0000:00:01.1 是模拟的 PIIX3 IDE 控制器（8086:7010，驱动 ata_piix）；SIGKILL 也杀不掉，Ctrl+Alt+Del 重启不了。
-- 原因：AlmaLinux 10 内核（6.12）在 c9（擎天）虚拟硬件上探测 ata_piix 时挂死，其它驱动的 udev worker 都在等它。卡在挂载根分区之前，**系统盘上的东西一点没动**。同一晚升级的 s3 规格（同样有 PIIX3）正常，EL9 内核在 c9 上也正常。
+- 现象：重启后 SSH 不回来；VNC 里约 369 秒出现 hung task，调用栈 `init_module_from_file → do_init_module → async_synchronize_cookie_domain`，之后每 2 分钟一行 udev 超时。关机时多个 udev worker（0000:00:01.1 PIIX3 IDE、virtio、VGA、cpu）都报 `is taking a long time`，SIGKILL 也杀不掉，Ctrl+Alt+Del 重启不了。
+- 原因：AlmaLinux 10 内核（6.12）在 c9（擎天）虚拟硬件上早期加载驱动时，某个异步探测任务永远不结束，`modprobe`/udev worker 都卡在 `async_synchronize` 里。卡在挂载根分区之前，**系统盘上的东西一点没动**。同一晚升级的 s3、之前的 c3 规格正常，EL9 内核在 c9 上也正常。
+- 对照实验（2026-11-13，两台按需 c9.xlarge.2 测试机，AlmaLinux 9.8 → 10）：**只有系统盘和加了数据盘的两台都以同样方式卡死**，与数据盘无关；最初怀疑 PIIX3 IDE（ata_piix），但**把 ata_piix/ata_generic 加入黑名单**（升级启动项 `modprobe.blacklist=… rd.driver.blacklist=…` + `/etc/modprobe.d`）后，ata_piix 已不再加载，**仍然同样卡死**——它不是原因。
 - 处理：leapp 把升级启动项设成了**持久默认项**（grubenv `saved_entry`），强制重启还会进去；华为云强制重启后 VNC 要几秒才重连，5 秒的 GRUB 菜单抢不到。可靠的办法是换盘改 grubenv：见 `recovery.md` F（`scripts/rescue-grubenv.sh`）。改回 EL9 后业务原样恢复。
-- 预防：`survey.sh` 对"华为云 c9 + PIIX3"报 HIGH。这类机器建议停在 AlmaLinux 9（支持到 2032）；要上 10，先在同规格测试机验证（候选办法：EL9 上把 ata_piix/ata_generic 加入黑名单并在升级启动项加 `modprobe.blacklist=ata_piix rd.driver.blacklist=ata_piix`，**未验证**）。
+- 预防：`survey.sh` 对华为云 c9 规格报 HIGH。**c9 只升到 AlmaLinux 9**（支持到 2032）；目前没有验证过的绕过办法。以后 AlmaLinux 10 内核更新后，可用同规格按需测试机（官方 AlmaLinux 9.4 镜像 → `dnf upgrade` → hop.sh 9→10，约 30 分钟）再试。
 
 ## 6. 每跳重启后
 

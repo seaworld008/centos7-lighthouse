@@ -33,19 +33,16 @@ MISS=""
 for f in avx avx2 bmi1 bmi2 f16c fma abm movbe xsave; do grep -qw $f /proc/cpuinfo || MISS="$MISS $f"; done
 if [ -n "$MISS" ]; then echo "x86-64-v3: NO (缺:$MISS)"; flag BLOCKER "CPU 不满足 x86-64-v3（缺$MISS）：AlmaLinux 10 标准版无法运行，只能升到 9，或用 AlmaLinux 10 x86_64_v2 变体"
 else echo "x86-64-v3: YES"; fi
-# 华为云 c9 规格 + 模拟的 PIIX3 IDE 控制器：AlmaLinux 10 内核在升级 initramfs 里探测 ata_piix 时挂死（真实踩坑，2 台 c9；同时升级的 s3 正常）
-piix3() { local d; for d in /sys/bus/pci/devices/*; do [ -e "$d/device" ] || continue
-  [ "$(cat "$d/vendor" 2>/dev/null)" = 0x8086 ] && [ "$(cat "$d/device" 2>/dev/null)" = 0x7010 ] && return 0; done; return 1; }
+# 华为云 c9 规格：AlmaLinux 10 内核在升级 initramfs 早期加载驱动时挂死（真实踩坑：2 台生产 + 2 台测试机；有无数据盘无关；
+# 黑名单 ata_piix/ata_generic 实测无效；同一晚的 s3、早先的 c3 正常）
 if grep -qiE "huawei" /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_asset_tag 2>/dev/null; then
   HWSPEC=$(curl -s -m 3 http://169.254.169.254/openstack/latest/meta_data.json 2>/dev/null | grep -oE '"metering.resourcespeccode": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/')
   echo "huawei-flavor: ${HWSPEC:-unknown}"
-  if piix3; then
-    hwfam=${HWSPEC%%.*}
-    if [ "$hwfam" = c9 ]; then
-      flag HIGH "华为云 c9 规格（$HWSPEC）带 PIIX3 IDE：AlmaLinux 10 内核在升级 initramfs 里探测 ata_piix 挂死（2 台实测），9→10 重启后卡住、VNC 抢不到 GRUB。建议只升到 AlmaLinux 9；要上 10 先在同规格测试机验证（pitfalls.md 9→10、recovery.md F）"
-    elif grep -q "General Purpose Processor" /proc/cpuinfo; then
-      flag INFO "华为云规格 ${HWSPEC:-unknown}（CPU 型号被隐藏，与 c9 同类）带 PIIX3 IDE：c9 上 EL10 内核探测 ata_piix 会挂死，这个规格未验证，9→10 前先用同规格测试机验证"
-    fi
+  hwfam=${HWSPEC%%.*}
+  if [ "$hwfam" = c9 ]; then
+    flag HIGH "华为云 c9 规格（$HWSPEC）：AlmaLinux 10 内核在升级 initramfs 早期加载驱动时挂死（4 台实测，与数据盘无关，黑名单 ata_piix 无效），9→10 重启后卡住、VNC 抢不到 GRUB。只升到 AlmaLinux 9（pitfalls.md 9→10、recovery.md F）"
+  elif grep -q "General Purpose Processor" /proc/cpuinfo; then
+    flag INFO "华为云规格 ${HWSPEC:-unknown}（CPU 型号被隐藏，与 c9 同类）：c9 上 EL10 内核会在升级 initramfs 里挂死，这个规格未验证，9→10 前先用同规格按需测试机试一次"
   fi
 fi
 

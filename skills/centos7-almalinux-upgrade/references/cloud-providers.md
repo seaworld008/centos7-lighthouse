@@ -23,7 +23,7 @@
 - **agent**：uniagent/telescope（主机监控，systemd 原生 unit）、ICAgent（cron mstart.sh + SysV）、hostguard（HSS，SysV）、CloudResetPwdUpdateAgent / CloudResetPwdAgent（一键重置密码，SysV，自带 JRE）。AlmaLinux 10.2 下 SysV 仍可启动；坏了的按华为文档重装。
 - 网卡：镜像常预置 ifcfg-eth0~eth4，9→10 时一起 `nmcli connection migrate`。
 - sys_vendor：老规格显示 "OpenStack Foundation"；c9 等新规格显示 "Huawei Cloud"，CPU 型号被隐藏为 "General Purpose Processor"。规格名可从元数据取：`curl -s http://169.254.169.254/openstack/latest/meta_data.json` 的 `meta."metering.resourcespeccode"`（如 `c9.xlarge.2.linux`）。
-- ★ **c9 规格不要直接 9→10**：EL10 内核在升级 initramfs 里探测 ata_piix 挂死（见 pitfalls 9→10），建议停在 AlmaLinux 9；s3 等老规格实测正常。survey 会提示。
+- ★ **c9 规格只升到 AlmaLinux 9**：EL10 内核在升级 initramfs 早期加载驱动时挂死（见 pitfalls 9→10；与数据盘无关，黑名单 ata_piix 无效，均已用测试机验证）；s3、c3 实测正常。survey 会提示。验证某个规格能否上 10：按需开一台同规格 AlmaLinux 9.4 → `dnf upgrade` → hop.sh 9→10，设好定时删除。
 - ★ **操作保护**：账号开了"敏感操作保护"时，强制关机/重启、删除云服务器等需要手机短信验证码，验证后约 15 分钟内同类操作免验证。提前告诉用户留在电脑前；Claude 不代输验证码。
 - VNC：强制重启/开机后控制台要几秒才能重连，抢不到 GRUB 菜单；同一个 VNC 页面换 hash 地址重进（先进实例列表再进 VNC）才会重连。区域不在当前区域时，实例列表搜不到（如北京一 / 北京四）。
 - 救援：同可用区内可以把系统盘卸下挂到别的机器上修改（recovery.md F）。

@@ -17,7 +17,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 - 宿主机 rpm 装的数据库要跨多个大版本（MariaDB 5.5→10.11、PostgreSQL 9.2→16）且数据量大
 - 非 x86_64、btrfs、系统盘极小且无法扩容
 - CPU 不支持 x86-64-v3（AlmaLinux 10 标准版跑不了；可以只升到 9，或用 AlmaLinux 10 的 x86_64_v2 变体）
-- 华为云 c9 规格（survey 报 HIGH）：EL10 内核在升级 initramfs 里探测 ata_piix 挂死，建议只升到 9（升 9 本身没问题）；万一已经卡住按 `references/recovery.md` F 换盘改启动项
+- 华为云 c9 规格（survey 报 HIGH）：EL10 内核在升级 initramfs 里挂死（测试机验证：与数据盘无关、黑名单 ata_piix 无效），只升到 9（升 9 本身没问题）；万一已经卡住按 `references/recovery.md` F 换盘改启动项
 - 业务本身就是容器化的、配置都在 compose/k8s 里——新建机器重新部署往往比原地升级更快
 
 拿不准时把判断依据告诉用户，让用户选。
