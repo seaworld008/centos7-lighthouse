@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-13
+
+升级次日第一次业务发布暴露的两个问题（报告 4.12）。
+
+### Added
+- `survey.sh`：扫描 cron 引用的脚本和 `/root|/data|/opt` 下 `script(s)` 目录里的 .sh，发现 `tar -czf x dir --exclude=...`（选项写在目录后面）报 MEDIUM——EL9+ 的 tar 1.34 会以 2 退出且 exclude 失效。冒烟测试覆盖命中与不误报。（规则基于真实脚本样本；container-smoke）
+- `hop.sh post`：docker-compose 仍是 v1 而 compose v2 插件已可用时提示补做 `finalize.sh compose-wrapper`。（untested）
+- `pitfalls.md`：发布/备份脚本的 tar 选项位置（含 CI 里 ssh 执行的同类命令、分开 ssh 的 cd 不生效、只保留最近 N 份备份）；老 docker-compose v1 在 Docker 29 上 `client version 1.25 is too old`，以及替换前核对 compose 项目名。（verified-on-real-run：8 个 Jenkins 任务与 1 个主机脚本修复后发布成功）
+
 ## [0.6.1] - 2026-11-13
 
 ### Fixed

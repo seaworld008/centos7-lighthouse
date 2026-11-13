@@ -104,6 +104,14 @@ operator: agent+human
 - 结论：c9 只升到 AlmaLinux 9；目前没有验证过的绕过办法。v0.6.0 文档里"探测 ata_piix 挂死"的说法已更正。
 - 状态：promoted → `pitfalls.md` 9→10、`cloud-providers.md`、`SKILL.md`、`survey.sh`（c9 判断不再依赖 PIIX3）
 
+### 4.12 ★ 次日第一次发布失败：tar 选项位置 + 老 docker-compose
+- 现象 1：Jenkins 发布 PHP 业务在"备份旧代码"一步失败（A 已是 9.8）：`tar -czvf x.tar.gz jxgl --exclude=runtime/log` → `options were used after any non-optional arguments ... has no effect`，退出码 2，`sh -xe` 终止。API 容器已在另一台（未升级的 EL7）更新，后台代码没同步，前后台版本不一致。
+- 原因：EL9 tar 1.34 / EL10 tar 1.35 不再把目录后的选项挪到前面。同一台目标机共有 8 个发布任务用这种写法；C 上的发布脚本没有 `set -e`，不会失败，但 exclude 失效，备份会把 37G runtime + 26G .git 全打包。
+- 顺带发现：任务里 `ssh host "cd $DIR"` 与 `ssh host "tar ..."` 分开执行，tar 一直在 `/root` 下打包一份 2022 年的过期副本，真实代码从未被备份；清理命令用单引号，变量在远端为空，从未清理备份目录（23G 旧副本）。
+- 处理：8 个任务 + C 的脚本统一改为：cd 与 tar 同一个 ssh、选项在前、只备份代码（不含 runtime、public/uploads、.git）、只保留最近 3 份；备份从 3.1G/150 秒降到 48M/5 秒。旧副本挪到子目录待用户确认后删除。
+- 现象 2：B 上的发布任务在目标机执行 `docker-compose up -d`，B 的 `/usr/local/bin/docker-compose` 还是 1.23.2：`client version 1.25 is too old. Minimum supported API version is 1.40`（Docker 29）。EL7 阶段 compose-wrapper 因没有 v2 插件按设计跳过，之后没有补做。核对容器 project 标签与目录名一致后运行 `finalize.sh compose-wrapper`，重跑发布成功。
+- 状态：promoted → `pitfalls.md` 应用层（tar、docker-compose）、`survey.sh`（扫描脚本里的 tar 写法，MEDIUM）、`hop.sh post`（v1 + v2 插件可用时提示补做 compose-wrapper）、冒烟测试
+
 ### 4.10 其它（只留在报告里）
 - 华为云开了敏感操作保护：强制关机/重启、删除云服务器都要短信验证码（约 15 分钟内免验证），需要用户在场。→ `cloud-providers.md`
 - A 的 rc.local 里 `nginx` 和 `systemctl restart rsyncd` 改成 `systemctl enable rsyncd`；B 的 nfs-server 开着但没有 export，保持原样。

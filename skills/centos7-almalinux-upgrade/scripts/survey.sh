@@ -201,6 +201,12 @@ for p in mysqld mariadbd postgres postmaster mongod redis-server elasticsearch; 
 # cron 里调用 mysqldump 的备份脚本：升级后 /usr/bin/mysqldump 变成 8.4（不认 MYSQL_PWD），而老脚本常 >/dev/null 2>&1 静默失败
 MDS=$(for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u "$u" 2>/dev/null; done | grep -v '^\s*#' | grep -oE '/[^ ;|>]+\.sh' | sort -u | while read -r s; do [ -f "$s" ] && grep -lq mysqldump "$s" 2>/dev/null && echo "$s"; done | tr '\n' ' ')
 [ -n "$MDS" ] && flag INFO "cron 里有 mysqldump 备份脚本（${MDS}）：升级前后都确认最近一次备份文件结尾有 '-- Dump completed'、各库都有文件（真实案例：全库备份每晚在一个坏库中止，持续几个月没人发现）。EL10 的 mysqldump 是 8.4，不认 MYSQL_PWD。可换成 scripts/mysql-backup.sh（逐库校验 + 监控指标）"
+# 发布/备份脚本里 tar 的 --exclude 写在目录参数之后：EL9+ 的 GNU tar ≥1.34 报错退出(2)且 exclude 不生效
+TARRE='(^|[;&|[:space:]"])tar[[:space:]]+-?[a-zA-Z]*c[a-zA-Z]*f[[:space:]]+[^[:space:]-][^[:space:]]*[[:space:]]+[^[:space:]-][^[:space:]]*[^#]*--exclude'
+TARX=$( { for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u "$u" 2>/dev/null; done | grep -v '^\s*#' | grep -oE '/[^ ;|>]+\.sh'
+  for d in /root/script /root/scripts /data/script /data/scripts /opt/script /opt/scripts; do [ -d "$d" ] && find "$d" -maxdepth 3 -type f -name '*.sh' 2>/dev/null; done; } | sort -u | head -500 | while read -r s; do
+  [ -f "$s" ] && grep -vE '^[[:space:]]*#' "$s" 2>/dev/null | grep -qE "$TARRE" && echo "$s"; done | head -10 | tr '\n' ' ')
+[ -n "$TARX" ] && flag MEDIUM "脚本里 tar 的 --exclude 写在目录参数后面（${TARX}）：EL9+ 的 tar 1.34 会报 'options were used after any non-optional arguments' 并以 2 退出，exclude 也不生效（set -e/Jenkins 发布直接失败，或备份把 runtime/.git 全打包）。把选项挪到目录前面；跑发布任务的 CI（Jenkins 等）里的同类命令也要查"
 rpm -qa | grep -qE "^(mariadb-server|postgresql-server|mysql-server)-" && flag BLOCKER "宿主机装了 rpm 版数据库服务（$(rpm -qa | grep -E '^(mariadb-server|postgresql-server|mysql-server)-' | tr '\n' ' ')）：每跳都会大版本升级，数据目录格式变化。先逻辑备份(mysqldump/pg_dumpall)，制定每跳 mysql_upgrade/pg_upgrade 方案"
 
 sec CUSTOM BINARIES（运行中、非 rpm 安装的可执行文件及其 EL7 库依赖）
