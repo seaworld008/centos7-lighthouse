@@ -73,6 +73,12 @@ t "finalize.sh oom-policy 改 MemoryMax + OOMPolicy + Restart" bash -c "SYSTEMD_
 t "finalize.sh oom-policy 幂等" bash -c "SYSTEMD_DIR='$U' bash '$K/finalize.sh' oom-policy | grep -q '没有需要修改的 unit'"
 # ---- 会修改系统、但对任何 EL 版本都安全的测试（只在一次性容器里）----
 if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
+  mkdir -p /root/script/osup-smoke
+  printf '#!/bin/bash\ncd /srv\ntar -czvf app.$(date +%%s).tar.gz app  --exclude=runtime --exclude=.git\n' > /root/script/osup-smoke/deploy.sh
+  printf '#!/bin/bash\ntar --exclude=app/runtime -czf /tmp/app.tgz app\n' > /root/script/osup-smoke/ok.sh
+  t "survey.sh 标出 --exclude 写在目录后的 tar" bash -c "bash '$K/survey.sh' 2>/dev/null | grep 'tar 的 --exclude' | grep -q 'osup-smoke/deploy.sh'"
+  t "survey.sh 不误报正确写法的 tar" bash -c "! bash '$K/survey.sh' 2>/dev/null | grep 'tar 的 --exclude' | grep -q 'osup-smoke/ok.sh'"
+  rm -rf /root/script/osup-smoke; rmdir /root/script 2>/dev/null || true
   printf '[kubernetes]\nname=k8s\nbaseurl=https://example.com/kubernetes-el7-x86_64\nenabled=1\n' > /etc/yum.repos.d/kubernetes.repo
   t "k8s.sh pin 在 k8s 源里 exclude 组件" bash -c "bash '$K/k8s.sh' pin >/dev/null; grep -q '^exclude=kubelet kubeadm kubectl' /etc/yum.repos.d/kubernetes.repo"
   t "k8s.sh pin 幂等" bash -c "bash '$K/k8s.sh' pin >/dev/null; [ \$(grep -c '^exclude=' /etc/yum.repos.d/kubernetes.repo) = 1 ]"

@@ -329,6 +329,12 @@ post)
     sed -i -E 's/^#osup-bind# //' /etc/fstab; systemctl daemon-reload; mount -a 2>&1 | head -3; echo "已恢复 fstab bind 挂载（#osup-bind#）"
   fi
   start_stateful
+  # docker-ce 升级后 compose v2 插件才出现；EL7 阶段 compose-wrapper 会拒绝替换，之后要记得补做，
+  # 否则 Docker 29 直接拒绝 v1：client version 1.25 is too old（真实踩坑：发布脚本里的 docker-compose 失败）
+  dcv=$(docker-compose version --short 2>/dev/null)
+  if [ "${dcv%%.*}" = 1 ] && docker compose version >/dev/null 2>&1; then
+    echo "!! docker-compose 仍是 v1 ($dcv)，compose v2 插件已可用：运行 bash $K/finalize.sh compose-wrapper（先确认容器的 com.docker.compose.project 标签与目录名一致）"
+  fi
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
   ;;

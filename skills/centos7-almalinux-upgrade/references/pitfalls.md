@@ -280,6 +280,13 @@
 - 原因：docker-compose v1.29 与 Docker ≥ 25 不兼容，失败前已经重命名了旧容器。
 - 处理：`docker compose`（v2）重建；先 `docker rm` 那个改名后的残留容器（确认它没有数据卷！）；`finalize.sh compose-wrapper` 让 `docker-compose` 命令转发到 v2。
 - ★ 别在 EL7 上就跑 `compose-wrapper`：Docker 19.03 没有 compose v2 插件，替换后 `docker-compose` 直接不可用（真实踩坑）。脚本现在会先确认 `docker compose version` 可用，不可用就保留原文件并退出；等 docker-ce 升级到带插件的版本再做。
+- ★ 更老的 v1（≤1.23）在 Docker 29 上更早就失败：`client version 1.25 is too old. Minimum supported API version is 1.40`，连 `docker-compose ps` 都不行。真实案例：EL7 阶段 wrapper 按设计跳过了，之后没人补做，第二天 Jenkins 发布在 `ssh 目标机 docker-compose up -d` 这一步才暴露。`hop.sh post` 现在发现"仍是 v1 且 v2 插件可用"会提示补做。替换前核对容器的 `com.docker.compose.project` 标签与目录名一致（v1 ≥1.21 保留连字符，与 v2 相同；更老的 v1 会去掉 `-`/`_`，替换后 `up -d` 会撞 container_name，需要 `-p` 指定旧项目名）。
+
+**★ 发布/备份脚本 `tar -czf x.tar.gz dir --exclude=...` 在 EL9+ 直接失败**
+- 现象：升级后第一次 Jenkins 发布在"备份旧代码"一步失败：`tar: The following options were used after any non-optional arguments in archive create or update mode ... --exclude 'runtime/log' has no effect`，`Exiting with failure status due to previous errors`（退出码 2）。脚本没有 `set -e` 时不会失败，但 exclude 不生效，备份把 runtime/.git 全打进去（真实案例：本该 2.8G 的备份变成 66G）。
+- 原因：EL7 的 tar 1.26 会把写在目录后面的选项挪到前面处理；EL9 的 tar 1.34、EL10 的 1.35 认为它们是位置相关的，只作用于后面的参数，并报错。
+- 处理：选项写在目录前面：`tar --exclude=dir/runtime/log --exclude=dir/.git -czf $BAK/dir.$T.tar.gz dir`。`survey.sh` 会扫描 cron 引用的脚本和 `/root/script*`、`/data/script*`、`/opt/script*` 下的 .sh 并报 MEDIUM；**在 CI（Jenkins 等）里通过 ssh 执行的同类命令扫描不到，升级前要去发布平台里搜一遍**（真实案例：同一台目标机有 8 个任务都是这种写法）。
+- 顺带常见的老问题：`ssh host "cd $DIR"` 和下一行 `ssh host "tar ..."` 是两个独立会话，cd 不生效，tar 实际在 `/root` 下执行，可能多年来备份的都是一份过期副本；`ssh host 'find $DIR ... -delete'` 用单引号时变量在远端为空，find 会在家目录里删文件。修的时候把 cd 和 tar 放进同一个 ssh，变量用双引号在本地展开。备份只打代码（用户上传、runtime、.git 不随发布变化），保留最近 N 份：`ls -1t $BAK/name.*.tar.gz | tail -n +$((N+1)) | xargs -r rm -f`。
 
 **★ 删掉"没用"的 PHP 后某站点从 200 变 404**
 - 教训：组件和站点的对应关系要在删之前告诉用户（nginx -T 里哪些 server 用 fastcgi_pass）。由用户决定站点去留。
