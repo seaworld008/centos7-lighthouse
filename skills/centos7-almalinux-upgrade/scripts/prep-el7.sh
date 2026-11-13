@@ -10,7 +10,7 @@
 # MIRROR 取值（基础 URL，下面拼 /centos-vault /epel-archive /almalinux /epel /docker-ce）：
 #   https://mirrors.aliyun.com          阿里云公网（国内通用，实测最稳）
 #   http://mirrors.cloud.aliyuncs.com   阿里云 ECS 内网（不走公网流量）
-#   https://repo.huaweicloud.com        华为云（实测会 429 限流，不稳就换阿里云）
+#   https://repo.huaweicloud.com        华为云（有时 429 限流；也有华为云主机上它 20MB/s、阿里云只有 157KB/s 的情况——先测速再选）
 #   https://mirrors.tuna.tsinghua.edu.cn
 #   upstream                            海外（AWS 等）：用 vault.centos.org / archives.fedoraproject.org / 官方源
 export LC_ALL=C
@@ -102,7 +102,16 @@ pipfix)
   # 之前 yum update 因文件冲突没装上的包（日志里 "Failed:" 段，如 python-urllib3），现在补装
   failed=$(awk '/^Failed:/{f=1;next} f&&NF==0{f=0} f{print $1}' /root/os-upgrade-kit/yum7update.log 2>/dev/null | sed -E 's/\.(noarch|x86_64|i686)$//; s/-[0-9][^-]*-[^-]*$//' | sort -u)
   [ -n "$failed" ] && { echo "补装之前失败的包: $failed"; yum -y install $failed 2>&1 | tail -2; }
+  # pip 包挪走后，当年用 --nodeps 替换掉的 rpm 依赖会露出来。真实案例：python-requests 依赖的 python-urllib3
+  # rpm 从没装过（一直是 pip 版），挪走后 leapp 启动即报 "No module named urllib3.exceptions"
+  miss=$(yum -q check dependencies 2>/dev/null | sed -nE 's/.* has missing requires of ([^ ]+).*/\1/p' | sort -u | tr '\n' ' ')
+  [ -n "$miss" ] && { echo "补装缺失的 rpm 依赖: $miss"; yum -y install $miss 2>&1 | tail -2; }
+  if rpm -q python-requests >/dev/null 2>&1 && ! python -c "import requests" >/dev/null 2>&1; then
+    echo "python 的 requests 导入失败（leapp 需要）：补装 python-urllib3 并重装 python-requests"
+    yum -y install python-urllib3 >/dev/null 2>&1; yum -y reinstall python-requests >/dev/null 2>&1
+  fi
   python -c "import yum" && echo "yum python 模块 OK"
+  rpm -q python-requests >/dev/null 2>&1 && { python -c "import requests" && echo "requests 模块 OK（leapp 依赖）" || echo "!! requests 仍无法导入：leapp 会起不来，先处理"; }
   ;;
 
 inhibitors)

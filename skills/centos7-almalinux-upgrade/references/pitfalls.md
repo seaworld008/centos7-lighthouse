@@ -35,7 +35,7 @@
 - 处理：停止探测等几分钟就会自动解除；`hop.sh prep`（目标 ≥9）会把当前 SSH 来源 IP 写进 `/etc/ssh/sshd_config.d/05-osup-penalty-exempt.conf` 的 `PerSourcePenaltyExemptList`（8→9 时 leapp 会给 sshd_config 加 Include，升级后自动生效）。
 
 **★ 下载期间换"代理"不一定更快**
-- 实测（华为云）：三台机器同时从阿里云镜像下载时每台只有 250~350KB/s，同一时间单台测速却有 14~16MB/s——是镜像侧的临时限速，过一会儿就恢复；经 VPC 内另一台机器（mihomo 代理）转发反而只有约 380KB/s。先在本机 `curl -o /dev/null -w '%{speed_download}'` 对比几个镜像，再决定换不换；leapp 的 dnf 下载日志按包写，大包（linux-firmware 600MB+）下载时日志会停很久，看 `/var/lib/leapp/el*userspace/var/cache/dnf` 下文件是否在变大。
+- 实测（华为云）：三台机器同时从阿里云镜像下载时每台只有 250~350KB/s，同一时间单台测速却有 14~16MB/s——是镜像侧的临时限速，过一会儿就恢复；经 VPC 内另一台机器（mihomo 代理）转发反而只有约 380KB/s。先在本机 `curl -o /dev/null -w '%{speed_download}'` 对比几个镜像，再决定换不换（另一台华为云主机实测反过来：华为云镜像 20MB/s、阿里云只有 157KB/s——**每台、每次都要测，不要照搬上一台的结论**）；leapp 的 dnf 下载日志按包写，大包（linux-firmware 600MB+）下载时日志会停很久，看 `/var/lib/leapp/el*userspace/var/cache/dnf` 下文件是否在变大。
 
 ## 2. EL7 准备阶段
 
@@ -112,6 +112,10 @@
 **★ backup.sh 打包 /root 花了十几分钟（构建机）**
 - 原因：CI/构建机的 /root 里有 `.m2`（17G）、`.npm`（16G）等构建缓存。
 - 处理：已默认排除 `.m2/repository`、`.npm`、`.pnpm-store`、`.gradle/caches`、`.yarn/cache` 等（可重新下载，快照里也有）。
+
+**★ pipfix 之后 leapp 起不来：`ImportError: No module named urllib3.exceptions`**
+- 原因：当年有人用 pip 版 urllib3 替换了 rpm（`rpm -e --nodeps python-urllib3`），`python-requests` rpm 一直靠 pip 版撑着；pipfix 把不属于 rpm 的 pip 文件挪走后依赖露出来，leapp 一启动就崩（preupgrade 直接"无报告"）。
+- 处理：`yum install python-urllib3 && yum reinstall python-requests`。`prep-el7.sh pipfix` 现在会跑 `yum check dependencies` 补装缺失的 rpm 依赖，并验证 `import requests`。
 
 ## 2b. 源系统是 CentOS Linux 8 / Stream 8
 
@@ -287,6 +291,21 @@
 - 原因：EL7 的 tar 1.26 会把写在目录后面的选项挪到前面处理；EL9 的 tar 1.34、EL10 的 1.35 认为它们是位置相关的，只作用于后面的参数，并报错。
 - 处理：选项写在目录前面：`tar --exclude=dir/runtime/log --exclude=dir/.git -czf $BAK/dir.$T.tar.gz dir`。`survey.sh` 会扫描 cron 引用的脚本和 `/root/script*`、`/data/script*`、`/opt/script*` 下的 .sh 并报 MEDIUM；**在 CI（Jenkins 等）里通过 ssh 执行的同类命令扫描不到，升级前要去发布平台里搜一遍**（真实案例：同一台目标机有 8 个任务都是这种写法）。
 - 顺带常见的老问题：`ssh host "cd $DIR"` 和下一行 `ssh host "tar ..."` 是两个独立会话，cd 不生效，tar 实际在 `/root` 下执行，可能多年来备份的都是一份过期副本；`ssh host 'find $DIR ... -delete'` 用单引号时变量在远端为空，find 会在家目录里删文件。修的时候把 cd 和 tar 放进同一个 ssh，变量用双引号在本地展开。备份只打代码（用户上传、runtime、.git 不随发布变化），保留最近 N 份：`ls -1t $BAK/name.*.tar.gz | tail -n +$((N+1)) | xargs -r rm -f`。
+
+**★ CI/发布机升级到 EL10 后 `ssh`/`scp`/`rsync` 报 `Host key verification failed`（之前一直免密）**
+- 现象：Jenkins 发布任务里 `ssh -p 10015 目标机 'docker pull ...'` 失败；免密本身没坏（报错在主机密钥校验，不在认证）。同一个任务里有的目标机正常、有的失败。
+- 原因：EL10 的 crypto-policies 在 ssh_config 里**显式**设置了 `HostKeyAlgorithms`。OpenSSH 只有在这个选项没设置时才会"优先协商 known_hosts 里已记录的密钥类型"；现在直接协商 ssh-ed25519。known_hosts 里只记录了 ECDSA（老系统首次连接时记下的）的主机 → 对方出示 ed25519 → BatchMode 下直接拒绝。真实案例：发布机 known_hosts 64 条里 62 条只有 ECDSA。
+- 处理：`scripts/known-hosts-fill.sh`——用已记录、已信任的类型（`-o HostKeyAlgorithms=<已记录类型>`）连上去，在这条已验证的连接里读取对方 `/etc/ssh/ssh_host_*_key.pub` 补齐缺的类型；不盲信新密钥，也不用 `StrictHostKeyChecking=no`。`UpdateHostKeys=yes` 不行：固定了 HostKeyAlgorithms 后它只接收同类型的密钥。`survey.sh` 会在 EL7-9 上提示没有 ed25519 记录的主机数，`hop.sh post` 到 10 后提醒。
+- ★ 验证时加 `-o ControlPath=none`：常见的 `ControlMaster auto` + `ControlPersist 10m` 会复用排查时建立的旧连接、跳过主机密钥校验，看起来"已经好了"，10 分钟后又坏。
+- 不要顺手"重新做免密"：密钥认证没问题，重做免密解决不了主机密钥记录的问题。另外，扫描时发现的"从来不在 known_hosts 里"的地址是升级前就连不上的（多数是任务里出现的镜像仓库/HTTP 地址，不是 ssh 目标），与升级无关。
+
+**★ Tomcat 里的 Jenkins 升级后重启，`/` 返回 404（`/jenkins/` 却能打开）**
+- 现象：`localhost.<日期>.log`：`Exception starting filter authentication-filter ... IllegalArgumentException: key cannot be empty or null`（`TokenBasedRememberMeServices2`），`catalina.log`：`Context [] startup failed due to previous errors`；同一时间 `/jenkins/` 是好的。
+- 原因：server.xml 里 `<Context path="" docBase="jenkins.war">` 指向 appBase 里的 war，Host 又开着 `autoDeploy`/`deployOnStartup`——同一个 war 被部署成 `/` 和 `/jenkins` 两个实例，共用同一个 JENKINS_HOME，启动时互相抢，谁先起来不确定（之前能用只是运气；两个实例同时跑还会把定时触发跑两遍）。
+- 处理：Host 上加 `autoDeploy="false" deployOnStartup="false"`，只部署显式写的 Context。**不要把 `jenkins.war` 挪走**——它就是 ROOT 的 docBase，挪走后 Tomcat 整个起不来（`The main resource set specified [.../jenkins.war] is not valid`）。`survey.sh` 会报这种配置（MEDIUM）。
+
+**重启 Jenkins 后所有人都被登出**
+- Jenkins 会话只在内存里，换 systemd unit、每跳重启都会让浏览器会话失效（catalina 里 `Exception loading sessions from persistent storage` 是同一件事，无害）。需要人登录的验证（触发真实发布）提前和用户约好；Agent 不代输密码。
 
 **★ 删掉"没用"的 PHP 后某站点从 200 变 404**
 - 教训：组件和站点的对应关系要在删之前告诉用户（nginx -T 里哪些 server 用 fastcgi_pass）。由用户决定站点去留。
