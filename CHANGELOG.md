@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-13
+
+华为云生产 Jenkins 发布机升级到 10.2 的经验（报告：`field-reports/2026-11-13-huawei-prod-jenkins-tomcat.md`）。
+
+### Added
+- `scripts/known-hosts-fill.sh`：CI/发布机到 EL10 后，经已信任的 ssh 连接读取目标机主机公钥，补齐 known_hosts 缺的类型——EL10 crypto-policies 固定 HostKeyAlgorithms，只记录了 ECDSA 的目标机会 `Host key verification failed`。不盲信新密钥；验证用 `ControlPath=none`。（verified-on-real-run：64 条记录、补齐后发布成功）
+- `survey.sh`：Tomcat `<Context docBase="*.war">` 指向 appBase 内的 war 且自动部署开着（同一个 war 部署两次）报 MEDIUM；EL7-9 上 `/root/.ssh/known_hosts` 有没有 ed25519 记录的主机时报 INFO。冒烟测试覆盖 Tomcat 检测。（规则用真实 server.xml 验证；container-smoke）
+- `hop.sh post`：到 EL10 后 known_hosts 有缺 ed25519 的主机时提醒运行 known-hosts-fill.sh。（untested）
+- `pitfalls.md` / `app-compat.md`：EL10 发布机主机密钥校验、Tomcat 同一 war 部署两次（不要挪走 war）、重启后 Jenkins 会话失效、Tomcat 里 Jenkins 的 systemd unit 要点、任务里写死 `python3.6`（EPEL python3-pandas + 转发）、镜像测速每次都要做。（verified-on-real-run）
+
+### Fixed
+- `prep-el7.sh pipfix`：挪走 pip 文件后跑 `yum check dependencies` 补装被 `--nodeps` 删掉的 rpm 依赖，并验证 `import requests`——真实案例 python-urllib3 缺失导致 leapp 起不来。冒烟测试复现该场景。（问题 verified-on-real-run；脚本修复 container-smoke）
+
+### Verified
+- 0.6.2 的 `hop.sh post` "docker-compose 仍是 v1 且 v2 插件可用"提醒在本次真实升级中按预期出现（verified-on-real-run）。
+
 ## [0.6.2] - 2026-11-13
 
 升级次日第一次业务发布暴露的两个问题（报告 4.12）。

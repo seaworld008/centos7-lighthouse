@@ -57,6 +57,8 @@
 实测：Jenkins 2.346.1（最后一个支持 Java 8 的 LTS）+ 自带 JDK 8u92（tar 包）在 EL8/9/10 上原样可用，367 个任务、133 个插件不用动。**OS 升级时不要顺便升级 Jenkins**（2.361+ 要 Java 11/17，插件要一起升），另起变更。
 - **先看实际版本**：rpm 版本常常不代表运行版本（war 被手工替换过）：`unzip -p /usr/lib/jenkins/jenkins.war META-INF/MANIFEST.MF | grep Jenkins-Version`。
 - **启动方式**：老 rpm 是 SysV 脚本（依赖 `/etc/init.d/functions`）。在 EL7 上就换成原生 unit，并且**环境变量与现在完全一致**——构建任务继承 Jenkins 的环境：先 `tr '\0' '\n' < /proc/<pid>/environ` 记下 PATH/LANG/HOME/SHELL（实测 SysV 下 `PATH=/sbin:/usr/sbin:/bin:/usr/bin`，**不含 /usr/local/bin**），以及 `/proc/<pid>/limits` 的 nofile。要点：`Type=simple`、`User=root`（与原来一致）、去掉 `--daemon`、`KillMode=process`（构建里起的后台进程不随 Jenkins 重启被杀）、`SuccessExitStatus=143`。旧的"systemd 219 下监控 Jenkins PID"之类的看门狗 timer 换 unit 后用 `Restart=on-failure` 代替。
+- **Tomcat 里跑的 Jenkins（手工 `startup.sh` 启动）**：实测 Jenkins 2.275 + Tomcat + JDK 8u271（都在 /data 下）EL8/9/10 原样可用。升级前就换成 systemd unit：`Type=forking`、`ExecStart=/bin/bash -lc '<tomcat>/bin/startup.sh'`（登录 shell 才有 /etc/profile 里的 JDK/JMeter/Maven/node PATH）、`Environment=HOME=/root`（JENKINS_HOME 默认 `~/.jenkins`，systemd 不保证 HOME）、`WorkingDirectory=` 与原进程 cwd 一致、`Environment=CATALINA_PID=...` + `PIDFile=`、`LimitNOFILE=` 与原来一致；切换后对比 `/proc/<pid>/environ`。检查 server.xml 有没有"同一个 war 部署两次"（见 pitfalls.md 应用层）。
+- **SSH 发布**：到 EL10 后 known_hosts 只有 ECDSA 的目标机会主机密钥校验失败，运行 `known-hosts-fill.sh`（见 pitfalls.md 应用层）。
 - **rpm 签名**：2.2xx 的 rpm 是 DSA/SHA1 签名，8→9 阻断。换完 unit 后 `rpm -e --justdb --noscripts --nodeps jenkins`（只删 rpm 记录，见 pitfalls.md 8→9）。
 - **构建依赖的宿主机命令**：先统计任务 shell 里用到的命令（`<command>` 段的首个单词），逐个确认来源（rpm / /usr/local / tools 目录 / 远程 ssh 执行）。`/etc/profile` 里设置的 JAVA_HOME/MAVEN_HOME/node PATH 升级后保留（任务里 `source /etc/profile` 的照常可用）。
 - **git**：1.8.3 → 2.43（EL8）→ 2.52（EL10），Jenkins git 插件 4.x 兼容；Jenkins 的 git 工具路径（`hudson.plugins.git.GitTool.xml`）若指向 SCL 的 `rh-git*`，SCL 会被删，先改成 `/usr/bin/git`。
@@ -82,6 +84,7 @@
 
 - EL9 起无 python2；pip 装到系统 site-packages 的包是升级失败头号元凶（每跳前 pipfix）。
 - 业务 Python 脚本：EL8=3.6，EL9=3.9，EL10=3.12。建议用 venv 或容器，不要往系统 site-packages 装东西。
+- 任务里写死 `python3.6`（例：Jenkins 发布后跑 JMeter，再用 `python3.6 jmeter_reports.py`（pandas）汇总）：python36 在 8→9 被删。到 10 后装 EPEL 的 `python3-pandas`（rpm，不用 pip），加 `/usr/local/bin/python3.6` 转发到 `/usr/bin/python3`；升级前把一次真实的结果文件和输出存下来，升级后同一个文件跑一遍、`diff` 输出一致才算过。pip 装在 `/usr/local/lib64/python3.6` 的包不会被 pipfix 挪走，但到 EL9+ 就用不上了。
 
 ## PHP
 

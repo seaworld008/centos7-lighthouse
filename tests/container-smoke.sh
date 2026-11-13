@@ -79,6 +79,12 @@ if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
   t "survey.sh 标出 --exclude 写在目录后的 tar" bash -c "bash '$K/survey.sh' 2>/dev/null | grep 'tar 的 --exclude' | grep -q 'osup-smoke/deploy.sh'"
   t "survey.sh 不误报正确写法的 tar" bash -c "! bash '$K/survey.sh' 2>/dev/null | grep 'tar 的 --exclude' | grep -q 'osup-smoke/ok.sh'"
   rm -rf /root/script/osup-smoke; rmdir /root/script 2>/dev/null || true
+  mkdir -p /opt/osup-tomcat-smoke/conf
+  printf '<Server><Service><Engine><Host name="localhost" appBase="webapps" unpackWARs="true" autoDeploy="true">\n<Context path="" docBase="app.war"/>\n</Host></Engine></Service></Server>\n' > /opt/osup-tomcat-smoke/conf/server.xml
+  t "survey.sh 标出 Tomcat 同一个 war 部署两次" bash -c "bash '$K/survey.sh' 2>/dev/null | grep 'Tomcat' | grep -q 'osup-tomcat-smoke'"
+  sed -i 's/autoDeploy="true"/autoDeploy="false" deployOnStartup="false"/' /opt/osup-tomcat-smoke/conf/server.xml
+  t "survey.sh 关掉自动部署后不再报 Tomcat" bash -c "! bash '$K/survey.sh' 2>/dev/null | grep 'Tomcat' | grep -q 'osup-tomcat-smoke'"
+  rm -rf /opt/osup-tomcat-smoke
   printf '[kubernetes]\nname=k8s\nbaseurl=https://example.com/kubernetes-el7-x86_64\nenabled=1\n' > /etc/yum.repos.d/kubernetes.repo
   t "k8s.sh pin 在 k8s 源里 exclude 组件" bash -c "bash '$K/k8s.sh' pin >/dev/null; grep -q '^exclude=kubelet kubeadm kubectl' /etc/yum.repos.d/kubernetes.repo"
   t "k8s.sh pin 幂等" bash -c "bash '$K/k8s.sh' pin >/dev/null; [ \$(grep -c '^exclude=' /etc/yum.repos.d/kubernetes.repo) = 1 ]"
@@ -116,6 +122,10 @@ if [ -f /.dockerenv ] && [ "$(rpm -E %rhel 2>/dev/null)" = 7 ] && [ "${SKIP_MUTA
   t "prep-el7.sh repos upstream → vault 源可用" bash -c "bash '$K/prep-el7.sh' repos upstream >/tmp/r.out 2>&1; grep -q 'vault.centos.org/7.9.2009' /etc/yum.repos.d/CentOS-Base.repo && yum -q makecache fast >/dev/null 2>&1"
   mkdir -p /usr/lib/python2.7/site-packages/fake_pip_pkg && touch /usr/lib/python2.7/site-packages/fake_pip_pkg-1.0-py2.7.egg-info
   t "prep-el7.sh pipfix 挪走不属于 rpm 的文件" bash -c "bash '$K/prep-el7.sh' pipfix | grep -q '挪走 [0-9]* 个' && [ ! -e /usr/lib/python2.7/site-packages/fake_pip_pkg ]"
+  # 真实踩坑：python-urllib3 当年被 pip 版替换（rpm 被 --nodeps 删掉），pipfix 挪走 pip 版后 leapp 起不来
+  if yum -q -y install python-requests >/dev/null 2>&1 && rpm -e --nodeps python-urllib3 >/dev/null 2>&1; then
+    t "prep-el7.sh pipfix 补装被 --nodeps 删掉的 rpm 依赖（python-urllib3）" bash -c "bash '$K/prep-el7.sh' pipfix >/tmp/p2.out 2>&1; rpm -q python-urllib3 >/dev/null && python -c 'import requests'"
+  fi
   t "prep-el7.sh inhibitors 可执行" bash -c "bash '$K/prep-el7.sh' inhibitors >/tmp/i.out 2>&1; grep -q 'blacklist floppy' /etc/modprobe.d/leapp-removed-drivers.conf"
   t "swap-openssh.sh: 未安装时不动" bash -c "rpm -q openssh-server >/dev/null && exit 0; bash '$K/swap-openssh.sh' | grep -q '未安装'"
   yum -q -y install openssh-server >/dev/null 2>&1

@@ -335,6 +335,11 @@ post)
   if [ "${dcv%%.*}" = 1 ] && docker compose version >/dev/null 2>&1; then
     echo "!! docker-compose 仍是 v1 ($dcv)，compose v2 插件已可用：运行 bash $K/finalize.sh compose-wrapper（先确认容器的 com.docker.compose.project 标签与目录名一致）"
   fi
+  # EL10 的 crypto-policies 固定了 HostKeyAlgorithms：known_hosts 里只有 ECDSA/RSA 的主机会 "Host key verification failed"
+  if [ "$CUR" -ge 10 ] && [ -s /root/.ssh/known_hosts ]; then
+    noed=$(awk '$1 !~ /^\|/ && $1 !~ /^#/ {t[$1]=t[$1]" "$2} END{for(h in t) if (t[h] !~ /ssh-ed25519/) n++; print n+0}' /root/.ssh/known_hosts)
+    [ "$noed" -gt 0 ] && echo "!! /root/.ssh/known_hosts 里 $noed 个主机没有 ed25519 记录：本机若是 CI/发布机，运行 bash $K/known-hosts-fill.sh 补齐（经已信任的连接读取，不盲信新密钥）"
+  fi
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
   ;;

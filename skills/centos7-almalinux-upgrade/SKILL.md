@@ -41,6 +41,7 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务、`oom-policy`（EL9+ 默认 OOMPolicy=stop） |
 | `mysql-backup.sh` | 收尾后可选：替换老的 mysqldump cron 脚本——宿主机/容器 MySQL 逐库备份 + 校验 + `--check`/`--metrics` 监控 |
 | `rescue-grubenv.sh` | 救援：在同可用区的救援机上（可作为 user data，无需登录）把故障机系统盘的默认启动项改回旧内核，用于卡在升级 initramfs、抢不到 GRUB 的情况 |
+| `known-hosts-fill.sh` | CI/发布机到 EL10 后：经已信任的 ssh 连接读取目标机主机公钥，补齐 known_hosts 缺的类型（解决 `Host key verification failed`） |
 | `k8s.sh` | K8s 节点：`backup`（etcd 快照/配置/二进制/pod 列表，自动 `pin` 版本）、`stop`、`nfs-off`/`nfs-on`、`nm`、`fix`、`check`（含 flannel.1 IPv6 丢包提示）、`pods`（与升级前对比）、`jvm-maxram`（cgroup v2 下老 JDK 的 OOM） |
 
 本机在 Windows Git Bash 下调用时，`remote.py` 已自动处理 MSYS 把 `/root/...` 改写成 `C:/Program Files/Git/root/...` 的问题。

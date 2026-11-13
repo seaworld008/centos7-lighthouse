@@ -207,6 +207,20 @@ TARX=$( { for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u "$u" 2>/dev/null
   for d in /root/script /root/scripts /data/script /data/scripts /opt/script /opt/scripts; do [ -d "$d" ] && find "$d" -maxdepth 3 -type f -name '*.sh' 2>/dev/null; done; } | sort -u | head -500 | while read -r s; do
   [ -f "$s" ] && grep -vE '^[[:space:]]*#' "$s" 2>/dev/null | grep -qE "$TARRE" && echo "$s"; done | head -10 | tr '\n' ' ')
 [ -n "$TARX" ] && flag MEDIUM "脚本里 tar 的 --exclude 写在目录参数后面（${TARX}）：EL9+ 的 tar 1.34 会报 'options were used after any non-optional arguments' 并以 2 退出，exclude 也不生效（set -e/Jenkins 发布直接失败，或备份把 runtime/.git 全打包）。把选项挪到目录前面；跑发布任务的 CI（Jenkins 等）里的同类命令也要查"
+# Tomcat：<Context docBase="xxx.war"> 指向 appBase 里的 war，同时 autoDeploy/deployOnStartup 开着 → 同一个 war 被部署两次
+TCD=""
+for sx in /data/*/conf/server.xml /opt/*/conf/server.xml /usr/local/*/conf/server.xml /usr/share/tomcat*/conf/server.xml; do
+  [ -e "$sx" ] || continue
+  grep -vE '^\s*<!--' "$sx" | grep -qE '<Context[^>]*docBase="[^"/][^"]*\.war"' || continue
+  grep -qE 'deployOnStartup="false"' "$sx" && continue
+  TCD="$TCD $sx"
+done
+[ -n "$TCD" ] && flag MEDIUM "Tomcat 的 <Context docBase=\"*.war\"> 指向 appBase 内的 war 且自动部署开着（${TCD# }）：同一个 war 会以 / 和 /<名字> 部署两次，Jenkins 这类会起两个实例共用同一个 HOME，重启后谁先起来不确定（真实案例：升级后重启 ROOT 起不来，报 key cannot be empty or null，/ 返回 404）。Host 上加 autoDeploy=\"false\" deployOnStartup=\"false\"；不要挪走那个 war（它就是 ROOT）"
+# CI/发布机：known_hosts 里只记录 ECDSA/RSA 的主机，到 EL10 后会 Host key verification failed（crypto-policies 固定了 HostKeyAlgorithms）
+if [ "$(rpm -E %rhel 2>/dev/null)" -lt 10 ] 2>/dev/null && [ -s /root/.ssh/known_hosts ]; then
+  KHN=$(awk '$1 !~ /^\|/ && $1 !~ /^#/ {t[$1]=t[$1]" "$2} END{for(h in t) if (t[h] !~ /ssh-ed25519/) n++; print n+0}' /root/.ssh/known_hosts)
+  [ "$KHN" -gt 0 ] && flag INFO "/root/.ssh/known_hosts 里 $KHN 个主机没有 ed25519 记录：本机若用 ssh/scp/rsync 发布（Jenkins 等），升级到 EL10 后这些主机会 Host key verification failed。到 10 后运行 known-hosts-fill.sh 补齐"
+fi
 rpm -qa | grep -qE "^(mariadb-server|postgresql-server|mysql-server)-" && flag BLOCKER "宿主机装了 rpm 版数据库服务（$(rpm -qa | grep -E '^(mariadb-server|postgresql-server|mysql-server)-' | tr '\n' ' ')）：每跳都会大版本升级，数据目录格式变化。先逻辑备份(mysqldump/pg_dumpall)，制定每跳 mysql_upgrade/pg_upgrade 方案"
 
 sec CUSTOM BINARIES（运行中、非 rpm 安装的可执行文件及其 EL7 库依赖）
