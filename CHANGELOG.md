@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-13
+
+### Fixed
+- 更正 v0.6.0 对华为云 c9 卡死原因的说法：两台按需 c9 测试机对照实验证明**与数据盘无关**，**把 ata_piix/ata_generic 加入黑名单后仍同样卡死**——ata_piix 不是原因（verified-on-real-run）。`survey.sh` 对 c9 的判断不再依赖 PIIX3 控制器；pitfalls / cloud-providers / SKILL / 报告 4.11 同步更正，c9 结论改为"只升到 AlmaLinux 9，暂无验证过的绕过办法"。
+
 ## [0.6.0] - 2026-11-13
 
 华为云三台生产机并行升级的经验（报告：`field-reports/2026-11-12-huawei-php-docker-nfs-frps-x3.md`）：一台 s3 到 10.2；两台 **c9** 的 EL10 内核在升级 initramfs 里探测 ata_piix 挂死，换盘改 grubenv 退回 9.8，无数据丢失。

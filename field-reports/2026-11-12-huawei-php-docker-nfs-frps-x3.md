@@ -49,7 +49,7 @@ operator: agent+human
 - 现象：SSH 不回来。VNC：约 369 秒 hung task，`init_module_from_file → do_init_module → async_synchronize_cookie_domain`；之后 `dracut-initqueue: Timed out while waiting for udev queue to empty` 无限循环。Ctrl+Alt+Del 后关机日志：`systemd-udevd: 0000:00:01.1: Worker ... is taking a long time`（还有 virtio、VGA、cpu 的 worker 在等），SIGKILL 杀不掉，关不了机。
 - 原因：0000:00:01.1 是模拟的 PIIX3 IDE（8086:7010，ata_piix）。EL10 的 6.12 内核在 c9（擎天）虚拟硬件上探测它时挂死；EL9 内核在同一台机器上正常；同晚的 s3 规格（同样有 PIIX3）9→10 正常。卡在挂根分区之前，系统盘没被改动。
 - 处理：换盘改 grubenv 退回 EL9（4.2）。
-- 预防：survey.sh 对"华为云 c9 + PIIX3"报 HIGH（从元数据 `metering.resourcespeccode` 取规格）；c9 建议停在 9。候选修复（黑名单 ata_piix/ata_generic + 升级启动项加 `modprobe.blacklist=ata_piix rd.driver.blacklist=ata_piix`）**未验证**。
+- 预防：survey.sh 对华为云 c9 规格报 HIGH（从元数据 `metering.resourcespeccode` 取规格）；c9 只升到 9。次日对照实验证明与数据盘无关、黑名单 ata_piix 无效（见 4.11），"ata_piix 挂死"只是最初的猜测。
 - 状态：promoted → `pitfalls.md` 9→10、`cloud-providers.md` 华为云、`SKILL.md`、`survey.sh`
 
 ### 4.2 ★ 抢不到 GRUB：leapp 升级项是持久默认项，换盘改 grubenv
@@ -95,6 +95,14 @@ operator: agent+human
 - 原因：停机几小时积压日志，追赶时约需 0.9GiB，compose 里 `mem_limit: 512m`（A 上同一采集器给的是 2G，正常）。
 - 处理：`docker update --memory 1536m --memory-swap 1536m` 立即生效，同步改 compose 文件和部署记录，之后 0 重启。
 - 状态：promoted → `pitfalls.md` 应用层
+
+### 4.11 ★ 次日对照实验：与数据盘无关；黑名单 ata_piix 无效
+- 起因：用户注意到失败的两台都只有系统盘，而之前所有成功的机器都有数据盘——但失败的两台同时也是仅有的 c9，两个因素混在一起。
+- 做法：北京四 AZ1 按需开两台 c9.xlarge.2（官方 AlmaLinux 9.4 镜像 → `dnf upgrade` 到 9.8，内核与生产相同），一台只有系统盘、一台加 20G 数据盘，其余完全一样；同一份工具包跑 9→10。设了定时删除，登录用 user data 写入的临时公钥，不设密码。
+- 结果 1：**两台都以同样方式卡死**（约 246 秒 hung task，`modprobe/udev-worker → async_synchronize_cookie_domain`），带数据盘的那台卡住时连 vdb 都还没探测到 → 与数据盘无关。
+- 结果 2：把单盘测试机的系统盘挂到救援机，给升级启动项加 `modprobe.blacklist=ata_piix,ata_generic rd.driver.blacklist=ata_piix,ata_generic`、写 `/etc/modprobe.d` 黑名单后重启：启动日志里不再出现 ata_piix 的 scsi host，但**仍然同样卡死** → ata_piix 不是原因（EL10 内核里它是模块 `CONFIG_ATA_PIIX=m`，黑名单确实生效）。
+- 结论：c9 只升到 AlmaLinux 9；目前没有验证过的绕过办法。v0.6.0 文档里"探测 ata_piix 挂死"的说法已更正。
+- 状态：promoted → `pitfalls.md` 9→10、`cloud-providers.md`、`SKILL.md`、`survey.sh`（c9 判断不再依赖 PIIX3）
 
 ### 4.10 其它（只留在报告里）
 - 华为云开了敏感操作保护：强制关机/重启、删除云服务器都要短信验证码（约 15 分钟内免验证），需要用户在场。→ `cloud-providers.md`
