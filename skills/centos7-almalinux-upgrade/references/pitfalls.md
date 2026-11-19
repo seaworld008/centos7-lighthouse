@@ -252,7 +252,7 @@
 - 原因：EL7 上是 pip/egg 装的 py2 cloud-init。
 - 处理：长期运行的机器上 cloud-init 作用有限，可 `touch /etc/cloud/cloud-init.disabled`；AWS 等依赖它的环境改装新系统 cloud-init 包（见 cloud-providers.md）。
 
-**云厂商 SysV 插件**（华为 hostguard/ICAgent/CloudResetPwd…）：AlmaLinux 10.2 仍保留 systemd-sysv-generator，实测能正常启动；为防以后去掉，可 `finalize.sh sysv-units` 包成原生 unit。升级前就坏的插件（如 cloudResetPwdAgent）在报告里注明"非本次引起"。
+**云厂商 SysV 插件**（华为 hostguard/ICAgent/CloudResetPwd…）：AlmaLinux 10.2 仍保留 systemd-sysv-generator，实测能正常启动；为防以后去掉，可 `finalize.sh sysv-units` 包成原生 unit。升级前就坏的插件（如 cloudResetPwdAgent）在报告里注明"非本次引起"。个别机器上 cloudResetPwdUpdateAgent restart 后不写 pid 文件、一直 failed（同版本的其它机器正常），属于插件自身问题，同样注明、交给云厂商。
 
 **★★ GitLab（omnibus 容器）一直 502：内置 PostgreSQL 反复 `lock file "/var/opt/gitlab/postgresql/.s.PGSQL.5432.lock" already exists`**
 - 现象：7→8 重启后 GitLab 正常起来，`hop.sh post` 跑完却变成 502；`gitlab-ctl status` 里 postgresql 每秒重启一次，日志提示 `Is another postmaster (PID 375) using socket file`，但 `ps -p 375` 查不到。
@@ -260,6 +260,42 @@
 - 处理：确认容器里没有 postgres 主进程后，`gitlab-ctl stop postgresql`，把 `.s.PGSQL.5432.lock` 挪走、删掉 `.s.PGSQL.5432`，`gitlab-ctl start postgresql`。PostgreSQL 会自动做崩溃恢复（实测 `redo is not required`），`/-/readiness?all=1` 全部 ok 即可。
 - 预防：compose 里给 GitLab 加 `stop_grace_period: 5m`；`hop.sh reboot` 和 `hop.sh post` 现在会先优雅停止有状态容器（GitLab/Gitea/Nexus/SonarQube 等已加入名单，最长等 300s），post 结束再启动回来；survey 对没设 stop_grace_period 的 GitLab 容器报 MEDIUM。
 
+**★ 升级后的"慢性病"：`verify.sh` 全绿，过几天才暴露**（一次对约 38 台已升级/新装机器的集中体检，见 `field-reports/2026-11-19-fleet-post-upgrade-audit.md`）。`verify.sh` 只比业务基线，下面这些要靠 `post-audit.sh`（只读）找出来；能自动修的由 `hop.sh tidy` 处理（`hop.sh post` 末尾自动执行，已升级完的机器可单独跑）。
+
+**★★ 升级完日志不再轮转：logrotate 没有任何东西在调度**
+- 现象：`/var/log/messages`、nginx/应用日志从升级那天起一直变大；`systemctl list-timers` 里没有 logrotate。17 台 leapp 升级到 9/10 的机器全部中招，全新安装的机器正常。
+- 原因：EL8 的 logrotate 由 `/etc/cron.daily/logrotate` 调度；EL9 起改为 `logrotate.timer`，只在全新安装时按 preset 启用，leapp 升级不会对新增的 unit 执行 preset（上游 RHEL-17361）。
+- 处理：`systemctl enable --now logrotate.timer`（`hop.sh tidy` 自动做），然后 `logrotate -d /etc/logrotate.conf 2>&1 | grep ^error` 看配置本身有没有错。常见错误两类：`logrotate.d` 里有人留的 `nginx.bak` 之类副本（logrotate 会读 `.bak`，与原文件重复定义同一日志，`duplicate log entry`，出错的那份配置被跳过）→ 把副本挪出目录；日志父目录权限过宽（`parent directory has insecure permissions`）→ 配置里加 `su root root`（或对应属主）。
+
+**★ `vi` 每次启动报 `E319: Sorry, the command is not available in this version`（`crontab -e`、`visudo` 都会弹）**
+- 原因：8→9 时 leapp 往 `/etc/virc` 追加了 `let skip_defaults_vim=1`、`filetype plugin on` 等（带 `" content added by Leapp` 注释），这些只有完整 vim 才有；`vi` 是 vim-minimal。包自带的新版本在 `/etc/virc.rpmnew`。
+- 处理：virc 里除了 Leapp 追加的行没有别的自定义内容时，用 `virc.rpmnew` 替换（`hop.sh tidy` 自动做，先备份；有自定义内容就只提示、不动）。
+
+**★ 开机 `systemd-sysctl` 报 `Couldn't write '1' to 'fs/may_detach_mounts'`**
+- 原因：`fs.may_detach_mounts` 只存在于 EL7 内核（Docker/K8s 的老安装文档常让加），EL8+ 内核没有这个键。
+- 处理：注释掉（`hop.sh tidy` 自动做；`/etc/sysctl.d/99-sysctl.conf` 是指向 `/etc/sysctl.conf` 的链接，只改真实文件，不要把链接 `sed -i` 成普通文件）。
+
+**★ `/etc/security/limits.conf` 写错的行：从来没生效，每次登录和每个 cron 任务都记错误**
+- 现象：`/var/log/secure` 里大量 `pam_limits(crond:session): unknown limit item ...` / `invalid line`；写错的那一行从来没生效过（例如限制项拼错、列数不对）。EL7 上就是这样，只是没人看 secure 日志，升级后体检时才发现。
+- 处理：`post-audit.sh` 会列出可疑行。按本意改正或注释——改正后限制会**第一次真正生效**，值偏小的话要先和业务确认；不自动改。
+
+**★ 被删除的旧服务留下的启用链接（`vdo.service`、`rhel-*.service`、`lvm2-lvmetad`、`readahead`、`netconsole`）**
+- 现象：`/etc/systemd/system/*.wants/` 里指向不存在文件的链接；不影响启动，但每次 `systemctl` 相关检查都有噪音，也会掩盖真正的问题。
+- 处理：`hop.sh tidy` 删除上述已知名字的失效链接（清单备份在 `/root/os-upgrade-kit/tidy-backup/removed-links.txt`）；其它名字的失效链接由 `post-audit.sh` 列出，人工确认是谁的。
+
+**★ `docker-ce.repo` 被人手工写死 `centos/7`，升级后 docker 一直装 EL7 的包**
+- 原因：同一个文件里其它段还是 `$releasever`，`hop.sh post` 的"硬编码旧版本的源挪走"规则因此跳过了它；`dnf` 不报错，只是 docker-ce/containerd 停在 el7 版本。
+- 处理：把写死的版本号改回 `$releasever`（`hop.sh tidy` 自动做，post 在处理源之前也会先做）。另外 post 现在把比上一跳更旧的版本号（7…上一跳）都当作"写死旧版本"，之前某跳漏掉的源也会被挪走。
+
+**★ 云厂商的非 rpm agent 在 EL9+ 起不来：`libldap-2.4.so.2: cannot open shared object file`**
+- 原因：EL9 起 openldap 是 2.6，2.4 的 so 在 `openldap-compat` 里，默认不装（与 libcrypt.so.1 / libxcrypt-compat 同类）。实测是某云数据库审计 agent。
+- 处理：已升级的机器 `dnf install openldap-compat` 后重启该服务；`hop.sh prep`（目标 ≥9）发现运行中的非 rpm 程序依赖 libldap/liblber-2.4 时，把 openldap-compat 写进 leapp 的 `to_install`。`post-audit.sh` 对本地程序和 failed unit 的可执行文件做 `ldd`，缺库报 HIGH。
+
+**★ unit 文件里 `Restart=` 等键写在了 `[Install]` 段：一直被忽略**
+- 现象：`journalctl -b | grep "in section 'Install', ignoring"`；这些键从来没生效（写的若是 `Restart=`，服务挂了不会被拉起），EL7 上也一样，只是没人注意。
+- 处理：把键挪到 `[Service]` 段后 `daemon-reload`。`post-audit.sh` 报 HIGH。
+
+**★ 退回 9.8 的机器（华为云 c9）一直带着 leapp 包、ELevate 源和 `/var/lib/leapp` 的升级用户空间**：见 `recovery.md` F 第 7 步。`post-audit.sh` 会报 MEDIUM。
 ## 7. 升级后应用层
 
 **★ 日志采集器（vector）升级后无限重启：`Memory cgroup out of memory: Killed process (vector)`**

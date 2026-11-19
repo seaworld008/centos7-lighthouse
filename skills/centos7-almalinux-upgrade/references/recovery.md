@@ -76,6 +76,7 @@ clearInterval(window.__k); rfb.sendKey(0xff0d);   // 回车
 4. 把故障机的系统盘以**数据盘**挂到救援机。有 user data 的救援机会自动找到带 `*-upgrade.*.conf` 的分区，把 `saved_entry` 改成上一个大版本的内核，备份原 grubenv，卸载，并在 VNC 控制台打印 `OSUP: DONE ... saved_entry=...` 和 `SAFE TO DETACH`；已有机器上手工执行 `bash rescue-grubenv.sh`。xfs 克隆盘 UUID 相同时脚本会用 `nouuid` 挂载。
 5. 从救援机卸载，**以系统盘挂回**故障机（华为云 EVS 列表页挂 SCSI 系统盘可能一直报"未挂载系统盘"，换到 ECS 详情页 → 磁盘 → 挂载磁盘，磁盘属性选"系统盘"），开机。
 6. 回到旧系统后：恢复业务（NFS 主机先 `k8s.sh nfs-on`）；`grubby --remove-kernel=/boot/vmlinuz-upgrade.x86_64` 删掉升级启动项，防止以后误入；删除救援机。
+7. 清理这次没做完的升级留下的残留（真实踩坑：退回 9.8 的机器一直带着 ELevate 源和 leapp 包）：确认 `grubby --info=ALL | grep -c upgrade` 为 0 后，`rm -f /boot/vmlinuz-upgrade.x86_64 /boot/initramfs-upgrade.x86_64.img`；`rpm -qa | grep -iE 'leapp|elevate'` 列出的包 `rpm -e`；`rm -rf /var/lib/leapp /etc/yum.repos.d/ELevate.repo`。最后跑 `post-audit.sh`，leapp 残留一项应消失。
 
 ## E. 回滚
 

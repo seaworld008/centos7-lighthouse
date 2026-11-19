@@ -114,6 +114,7 @@ flowchart LR
 | `prep-el7.sh repos/pipfix/inhibitors`、`swap-openssh.sh` 的检测路径 | ✅ CI 在 centos:7 容器里真实执行（会修改系统的测试只在容器内运行） |
 | `fleet_summary.py` | ✅ 单元测试 + 真实 survey 数据 |
 | 全程使用脚本：CentOS 7（`prep-el7.sh` 全部子命令、`hop.sh` 7→8→9→10、`finalize.sh`） | ✅ 阿里云多业务机 CentOS 7.6 → AlmaLinux 10.2，19 个容器与基线一致，最终重启测试通过（[实战报告](field-reports/2026-11-06-aliyun-registry-waf-lnmp-centos7.md)） |
+| `post-audit.sh`（升级后只读体检）、`hop.sh tidy` | ✅ post-audit 在 11 台真实机器上运行，结论与人工排查一致；tidy 在 CentOS 7 / AlmaLinux 8/9/10 容器冒烟测试，真实机器上实测幂等（[实战报告](field-reports/2026-11-19-fleet-post-upgrade-audit.md)） |
 | `swap-openssh.sh` 的实际替换（自编译 openssh） | ⚠️ 已在 CI 中测试检测逻辑；真实替换只在首次迁移中手工做过 |
 
 **先在非关键机器上试，并做好整机快照。**

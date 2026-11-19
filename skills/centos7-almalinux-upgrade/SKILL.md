@@ -32,10 +32,11 @@ description: 把老旧 CentOS 7 / CentOS 8（及 RHEL7/8 系）服务器原地�
 | `survey.sh` | 只读勘察，末尾输出分级 RISK FLAGS（BLOCKER/HIGH/MEDIUM/INFO） |
 | `backup.sh` | 备份配置 + 生成业务基线 `baseline.tsv`（服务/端口/容器/各域名 HTTP 码/kubectl） |
 | `state.sh` / `verify.sh` | 生成当前状态 / 与基线对比，输出 FAIL/WARN |
+| `post-audit.sh` | 升级完成后的只读体检：leapp 残留、logrotate 没被调度、EL7 专用 sysctl、Leapp 改坏的 `/etc/virc`、limits 写错、失效的服务链接、写死旧版本的源、本地程序缺库等，输出 HIGH/MEDIUM/INFO |
 | `prep-el7.sh` | EL7 准备：`repos` 修源、`update` 到 7.9、`pipfix`、`inhibitors` |
 | `convert-el8.sh` | 源系统是 CentOS 8 时：`prep` → `run`（官方 almalinux-deploy）→ `post`，转成 AlmaLinux 8 |
 | `swap-openssh.sh` | 把自编译 openssh 换回官方包（带自动兜底） |
-| `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post` |
+| `hop.sh` | 每一跳：`prep`→`pre`→`report`/`answer`→`up`→`reboot`→`post`；`tidy` 是升级后的小修（post 末尾自动执行，已升级完的机器可单独跑） |
 | `nginx-static-build.sh` | 自编译 nginx 同版本静态重编（过渡期一路可用） |
 | `fleet_summary.py` | 本机运行：汇总多台 survey 结果 → A/B/C/D 分类、VPN/EL8 标记、金丝雀与分批建议（`--groups` 让同业务主备不同批） |
 | `finalize.sh` | EL10 收尾：compose 包装、kubectl 对齐集群、helm、postfix lmdb、nginx.org 源、cgroup v1 兼容、SysV 包装、legacy iptables 模块、redis→valkey、手工启动进程转 systemd 服务、`oom-policy`（EL9+ 默认 OOMPolicy=stop） |
@@ -121,6 +122,7 @@ bash verify.sh <BACKUP_DIR>   # FAIL 必须处理；WARN 判断是否预期
 - 设了内存上限的 unit → `finalize.sh oom-policy`（否则 OOM 一次整个服务就停了、不会再起来）
 - 数据库备份：确认 cron 备份脚本升级后真的在产出完整文件（结尾有 `-- Dump completed`），不行就换 `mysql-backup.sh`
 - `dnf -y upgrade` 全量更新，确认 `dnf check-update` 为空
+- 跑 `post-audit.sh` 做升级后体检（`verify.sh` 只比业务基线，发现不了"日志不轮转"这类过几天才出问题的项）：能自动修的 `hop.sh tidy` 已处理，其余按 `references/pitfalls.md` 第 6 节处理；升级前就坏的项（如云厂商插件）在报告里注明。用旧版本技能升级完的机器也可以补跑 `post-audit.sh` + `hop.sh tidy`
 - **最后再重启一次做开机自启测试**，跑 `verify.sh`，全部服务自己起来才算完成
 
 ### 阶段 5：交付报告

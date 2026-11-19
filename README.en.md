@@ -36,6 +36,7 @@ CentOS 7 reached end of life in June 2024. Many fleets still run it, each server
 - **`backup.sh` / `verify.sh`**: business baseline (services, ports, containers, per-vhost HTTP codes, kubectl), compared after every hop
 - **`hop.sh`**: one ELevate hop at a time: prep → preupgrade → report/answer → upgrade → safe reboot → post-cleanup. Long tasks run under `systemd-run`, so a dropped SSH session doesn't interrupt them
 - **`prep-el7.sh`, `swap-openssh.sh`, `nginx-static-build.sh`, `finalize.sh`**: EL7 preparation and EL10 modernization (nginx.org stable, kubectl matched to your cluster, helm, postfix lmdb)
+- **`post-audit.sh` / `hop.sh tidy`**: read-only post-upgrade health check (logrotate not scheduled, Leapp-broken `/etc/virc`, EL7-only sysctl, dangling unit links, repos pinned to old releases, missing libraries…) and idempotent fixes for the safe ones
 - **`fleet_summary.py`**: aggregates many `survey.txt` files, classifies each host (A/B/C/D, VPN, CentOS 8), and proposes a canary plus batches (HA pairs are kept in different batches)
 - **Runbooks**: pitfalls, app compatibility, Alibaba Cloud / Huawei Cloud / AWS specifics, initramfs emergency-shell recovery, fleet rollout
 

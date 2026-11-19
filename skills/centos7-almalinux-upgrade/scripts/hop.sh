@@ -10,6 +10,7 @@
 #   bash hop.sh reboot --no-stop    不提前停止任何容器（业务方要求某些容器"不能动"时），交给 docker.service 关机时优雅停止
 #   bash hop.sh post   <MIRROR>    重启进入新版本后：检查成功标记 → 删 leapp/旧内核/残留 → 修 repo → dnf upgrade
 #   bash hop.sh status             看当前 leapp 进度
+#   bash hop.sh tidy               升级后小修：logrotate.timer、EL7 专用 sysctl、Leapp 改坏的 /etc/virc、旧服务失效链接、docker-ce 源写死版本（post 末尾自动执行）
 # MIRROR 同 prep-el7.sh（https://mirrors.aliyun.com / http://mirrors.cloud.aliyuncs.com / https://repo.huaweicloud.com / upstream）
 export LC_ALL=C
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -80,6 +81,53 @@ start_stateful() { # post 结束时把 stop_stateful 停掉、还没被 docker �
   while read -r n; do [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = true ] || { echo "启动之前优雅停止的容器 $n"; docker start "$n" >/dev/null; }; done < $K/stateful-stopped.txt
   : > $K/stateful-stopped.txt
 }
+
+# ---- tidy：升级后的系统小修（post 末尾自动执行；已升级完的机器可单独跑 hop.sh tidy）。每项都幂等，改动前备份到 $K/tidy-backup
+TB=$K/tidy-backup
+tidy_bak() { mkdir -p "$TB"; cp -a "$1" "$TB/$(echo "$1" | tr / _).$(date +%Y%m%d%H%M%S)"; }
+tidy_logrotate() { # leapp 不会按新系统的 preset 启用新增的 logrotate.timer；EL9+ 不再有 cron.daily/logrotate → 日志从此不轮转（真实踩坑：17 台全中）
+  [ "$CUR" -ge 9 ] && command -v logrotate >/dev/null && [ ! -e /etc/cron.daily/logrotate ] || return 0
+  systemctl is-enabled -q logrotate.timer 2>/dev/null && return 0
+  if systemctl enable --now logrotate.timer >/dev/null 2>&1; then echo "启用 logrotate.timer（升级后默认没启用，日志不轮转）"; else echo "WARN: logrotate.timer 启用失败"; fi
+  local e; e=$(logrotate -d /etc/logrotate.conf 2>&1 | grep -c '^error')
+  [ "$e" -gt 0 ] && echo "!! logrotate -d 有 $e 条 error（logrotate.d 里的 .bak 副本、日志目录权限要 su 等），用 post-audit.sh 看明细"
+  return 0
+}
+tidy_sysctl() { # fs.may_detach_mounts 只有 EL7 内核有（docker/k8s 安装文档常加），EL8+ 开机 systemd-sysctl 报 Couldn't write
+  [ "$CUR" -ge 8 ] || return 0
+  local f
+  for f in /etc/sysctl.conf /etc/sysctl.d/*.conf; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue   # 99-sysctl.conf 是指向 sysctl.conf 的链接，sed -i 会把链接变成普通文件
+    grep -qE '^[[:space:]]*fs\.may_detach_mounts' "$f" || continue
+    tidy_bak "$f"; sed -i -E 's/^([[:space:]]*fs\.may_detach_mounts.*)$/# EL7 only, not on EL8+ kernels: \1/' "$f"; echo "注释 EL7 专用 sysctl fs.may_detach_mounts: $f"
+  done
+}
+tidy_virc() { # 8→9 时 leapp 往 /etc/virc 追加 let/filetype 等只有完整 vim 才有的命令：vim-minimal 的 vi 每次启动报 E319（crontab -e、visudo 受影响）
+  local f=/etc/virc extra
+  [ "$CUR" -ge 9 ] && [ -f $f.rpmnew ] && grep -q 'content added by Leapp' $f 2>/dev/null || return 0
+  # 两个方向都比（不依赖 diff）：virc 里多出的只能是 Leapp 加的那几行，rpmnew 里的行 virc 里都要有
+  extra=$({ grep -vxF -f $f.rpmnew $f | grep -vxE ' *|filetype plugin on|" content added by Leapp|let skip_defaults_vim=1|set t_BE='; grep -vxF -f $f $f.rpmnew; })
+  if [ -n "$extra" ]; then echo "!! /etc/virc 除了 Leapp 追加的行还有自定义内容：人工对比 $f 和 $f.rpmnew"; return 0; fi
+  tidy_bak $f; cp $f.rpmnew $f && rm -f $f.rpmnew && echo "/etc/virc 换回包自带版本（去掉 Leapp 追加的行，vi 不再报 E319）"
+}
+tidy_links() { # 已被删除的旧服务（vdo、rhel-*、readahead、lvmetad、netconsole）留下的启用链接
+  [ "$CUR" -ge 8 ] || return 0
+  local l n c=0
+  for l in /etc/systemd/system/*.wants/* /etc/systemd/system/*.requires/* /etc/rc.d/rc[0-6].d/*; do
+    [ -L "$l" ] && [ ! -e "$l" ] || continue
+    n=$(basename "$l")
+    case "$n" in vdo.service|rhel-*.service|systemd-readahead-*.service|lvm2-lvmetad.socket|lvm2-lvmetad.service|[KS][0-9][0-9]netconsole) ;; *) continue;; esac
+    mkdir -p "$TB"; echo "$l -> $(readlink "$l")" >> "$TB/removed-links.txt"; rm -f "$l"; c=$((c+1))
+  done
+  [ $c -gt 0 ] && { systemctl daemon-reload 2>/dev/null; echo "删除 $c 个已删除旧服务的启用链接（清单 $TB/removed-links.txt）"; }
+  return 0
+}
+tidy_docker_repo() { # docker-ce.repo 被人手工写死 centos/7：同文件其它段有 $releasever，post 不会挪走它，升级后一直装 EL7 的包
+  local f=/etc/yum.repos.d/docker-ce.repo
+  [ "$CUR" -ge 8 ] && [ -f "$f" ] && grep -qE '^baseurl=.*/linux/centos/[0-9]+/' "$f" || return 0
+  tidy_bak "$f"; sed -i -E 's#^(baseurl=.*/linux/centos/)[0-9]+/#\1$releasever/#' "$f"; echo "docker-ce.repo：写死的 centos/<版本号> 改成 \$releasever"
+}
+tidy_all() { tidy_logrotate; tidy_sysctl; tidy_virc; tidy_links; tidy_docker_repo; }
 case "$1" in
 prep)
   M=${2:?需要 MIRROR}
@@ -115,15 +163,23 @@ prep)
   fi
   # EL9 起 libcrypt.so.1 拆到 libxcrypt-compat（默认不装）：自编译 nginx/mysqld 等依赖它，升级后开机起不来（真实踩坑）
   # → 让 leapp 在升级事务里一起装上（/etc/leapp/transaction/to_install）
+  # 同理 EL9 起 openldap 2.6 没有 libldap-2.4.so.2/liblber-2.4.so.2（在 openldap-compat 里）：云厂商的数据库审计 agent 等依赖它（真实踩坑）
   if [ "$TGT" -ge 9 ]; then
-    need=""
+    need=""; needl=""
     for e in $(ls -l /proc/[0-9]*/exe 2>/dev/null | awk '{print $NF}' | grep '^/' | sort -u); do
       [ -f "$e" ] || continue; rpm -qf "$e" >/dev/null 2>&1 && continue
-      ldd "$e" 2>/dev/null | grep -q 'libcrypt\.so\.1 ' && need="$need $e"
+      libs=$(ldd "$e" 2>/dev/null)
+      echo "$libs" | grep -q 'libcrypt\.so\.1 ' && need="$need $e"
+      echo "$libs" | grep -qE 'lib(ldap|lber)-2\.4\.so\.2 ' && needl="$needl $e"
     done
+    mkdir -p /etc/leapp/transaction
     if [ -n "$need" ]; then
-      mkdir -p /etc/leapp/transaction; grep -qx libxcrypt-compat /etc/leapp/transaction/to_install 2>/dev/null || echo libxcrypt-compat >> /etc/leapp/transaction/to_install
+      grep -qx libxcrypt-compat /etc/leapp/transaction/to_install 2>/dev/null || echo libxcrypt-compat >> /etc/leapp/transaction/to_install
       echo "这些非 rpm 程序依赖 libcrypt.so.1，已把 libxcrypt-compat 加入 leapp 安装列表:$need"
+    fi
+    if [ -n "$needl" ]; then
+      grep -qx openldap-compat /etc/leapp/transaction/to_install 2>/dev/null || echo openldap-compat >> /etc/leapp/transaction/to_install
+      echo "这些非 rpm 程序依赖 libldap/liblber-2.4，已把 openldap-compat 加入 leapp 安装列表:$needl"
     fi
   fi
   echo "== 探测目标源（\$releasever=$TGT）:"
@@ -290,11 +346,13 @@ post)
     echo "默认内核: $(grubby --default-kernel 2>/dev/null)"
   fi
   for e in /boot/loader/entries/*.conf; do k=$(awk '/^linux/{print $2}' "$e"); [ -n "$k" ] && [ ! -e "/boot${k#/boot}" ] && [ ! -e "$k" ] && { echo "删除失效启动项 $e"; rm -f "$e"; }; done
+  tidy_docker_repo
   cd /etc/yum.repos.d && mkdir -p disabled-for-upgrade
   mv ./*.rpmsave disabled-for-upgrade/ 2>/dev/null
   for f in ./*.rpmnew; do [ -e "$f" ] && { cp -a "${f%.rpmnew}" "disabled-for-upgrade/$(basename "${f%.rpmnew}").el$PREV" 2>/dev/null; mv -f "$f" "${f%.rpmnew}"; }; done
-  # 指向旧版本的残留 repo（硬编码 /7/ /8/ /9/ 或 el7/el8/el9 的第三方源）挪走
-  for f in ./*.repo; do grep -qE "^baseurl=.*(/|el|centos)${PREV}(/|\b)" "$f" && ! grep -qE '\$releasever' "$f" && { echo "挪走硬编码 EL$PREV 的源: $f"; mv "$f" disabled-for-upgrade/; }; done
+  # 指向旧版本的残留 repo（硬编码 /7/ /8/ /9/ 或 el7/el8/el9 的第三方源）挪走；比上一跳更旧的版本号也算（之前某跳漏掉的）
+  OLDV=$(seq -s'|' 7 "$PREV")
+  for f in ./*.repo; do grep -qE "^baseurl=.*(/|el|centos)(${OLDV})(/|\b)" "$f" && ! grep -qE '\$releasever' "$f" && { echo "挪走硬编码 EL$PREV 的源: $f"; mv "$f" disabled-for-upgrade/; }; done
   [ -f elrepo.repo ] && mv elrepo.repo disabled-for-upgrade/
   EPELS=""; for f in /etc/yum.repos.d/epel*.repo; do [ -e "$f" ] || continue; case "$f" in *cisco-openh264*) ;; *) EPELS="$EPELS $f";; esac; done
   # shellcheck disable=SC2086
@@ -340,13 +398,17 @@ post)
     noed=$(awk '$1 !~ /^\|/ && $1 !~ /^#/ {t[$1]=t[$1]" "$2} END{for(h in t) if (t[h] !~ /ssh-ed25519/) n++; print n+0}' /root/.ssh/known_hosts)
     [ "$noed" -gt 0 ] && echo "!! /root/.ssh/known_hosts 里 $noed 个主机没有 ed25519 记录：本机若是 CI/发布机，运行 bash $K/known-hosts-fill.sh 补齐（经已信任的连接读取，不盲信新密钥）"
   fi
+  tidy_all
   echo "== failed units:"; systemctl --failed --no-legend --no-pager
   df -h / | tail -1
+  echo "== 升级全部完成后跑一次只读体检: bash $K/post-audit.sh"
   ;;
 
 status)
   for f in $(ls -t $K/leapp-*.log 2>/dev/null | head -1); do echo "$f:"; grep -v '^\s*$' "$f" | tail -5; done
   pgrep -af "[l]eapp (pre)?upgrade" | head -2 ;;
 
-*) sed -n '2,14p' "$0";;
+tidy) tidy_all; echo "tidy 完成（只读体检: bash post-audit.sh）" ;;
+
+*) sed -n '2,15p' "$0";;
 esac
