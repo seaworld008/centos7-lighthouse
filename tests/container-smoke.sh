@@ -47,7 +47,9 @@ printf '[remove_pam_pkcs11_module_check]\n# confirm = \n' > "$LEAPP_LOG_DIR/answ
 t "hop.sh report parses leapp json" bash -c "bash '$K/hop.sh' report 2>&1 | tee /dev/stderr | grep -q '\\[X\\] Fake inhibitor' && bash '$K/hop.sh' report 2>&1 | grep -q 'echo fix'"
 unset LEAPP_LOG_DIR
 
-t "hop.sh usage"        bash -c "bash '$K/hop.sh' | grep -q 'hop.sh prep'"
+t "hop.sh usage"        bash -c "bash '$K/hop.sh' | grep -q 'hop.sh prep' && bash '$K/hop.sh' | grep -q 'hop.sh tidy'"
+t "post-audit.sh runs and prints FLAGS" bash -c "POST_AUDIT_OFFLINE=1 bash '$K/post-audit.sh' 2>/dev/null | grep -q '^################ POST-AUDIT FLAGS'"
+t "post-audit.sh no shell errors"       bash -c "! POST_AUDIT_OFFLINE=1 bash '$K/post-audit.sh' 2>&1 >/dev/null | grep -E 'syntax error|unbound variable|integer expression expected|bad substitution'"
 t "finalize.sh usage"   bash -c "bash '$K/finalize.sh' | grep -q compose-wrapper && bash '$K/finalize.sh' | grep -q manual-procs"
 t "k8s.sh usage"        bash -c "bash '$K/k8s.sh' | grep -q 'k8s.sh backup' && bash '$K/k8s.sh' | grep -q jvm-maxram"
 t "k8s.sh pods 无 kubectl 时优雅退出" bash -c "out=\$(bash '$K/k8s.sh' pods 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'kubectl 连不上'"
@@ -105,6 +107,34 @@ if [ -f /.dockerenv ] && [ "${SKIP_MUTATING:-0}" != 1 ]; then
   printf '#!/bin/sh\necho 1.29.2\n' > /usr/local/bin/docker-compose; chmod 755 /usr/local/bin/docker-compose
   t "finalize.sh compose-wrapper 无 v2 插件时不替换" bash -c "! bash '$K/finalize.sh' compose-wrapper >/dev/null 2>&1; grep -q 'echo 1.29.2' /usr/local/bin/docker-compose"
   rm -f /usr/local/bin/docker-compose; for b in $(cat /tmp/fake-bins 2>/dev/null); do rm -f /usr/local/sbin/$b; done; rm -f /tmp/fake-bins
+  # post-audit.sh 检测 + hop.sh tidy 自动修（真实踩坑：limits 拼写错误、EL7 专用 sysctl、旧服务失效链接、docker-ce 源写死 centos/7、Leapp 改坏 /etc/virc）
+  EL=$(rpm -E %rhel)
+  mkdir -p /etc/sysctl.d /etc/security/limits.d /etc/systemd/system/multi-user.target.wants
+  printf 'fs.may_detach_mounts = 1\n' > /etc/sysctl.d/99-osup-smoke.conf
+  printf '* seft nofile 65535\n* hard memlock unlimitedd\n* soft nofile 1024\n' > /etc/security/limits.d/99-osup-smoke.conf
+  ln -sf /usr/lib/systemd/system/osup-smoke-gone.service /etc/systemd/system/multi-user.target.wants/vdo.service
+  [ -e /etc/yum.repos.d/docker-ce.repo ] || printf '[docker-ce-stable]\nname=x\nbaseurl=https://example.com/docker-ce/linux/centos/7/$basearch/stable\nenabled=1\n' > /etc/yum.repos.d/docker-ce.repo
+  POST_AUDIT_OFFLINE=1 bash "$K/post-audit.sh" > "$W/pa1.txt" 2>&1
+  t "post-audit.sh 标出 limits 写错的行" grep -q '^\[MEDIUM\] limits 配置有写错的行.*seft' "$W/pa1.txt"
+  t "post-audit.sh 不把正确的 limits 行当错" bash -c "! grep '^\[MEDIUM\] limits' '$W/pa1.txt' | grep -q 'soft nofile 1024'"
+  t "post-audit.sh 标出失效的服务启用链接" grep -q '失效的服务启用链接.*vdo.service' "$W/pa1.txt"
+  if [ "$EL" -ge 8 ]; then
+    t "post-audit.sh 标出 EL7 专用 sysctl" grep -q '^\[MEDIUM\] sysctl 里有 EL7 专用' "$W/pa1.txt"
+    t "post-audit.sh 标出写死旧版本的 docker-ce 源" grep -q '^\[MEDIUM\] 启用的源写死了旧版本号.*docker-ce' "$W/pa1.txt"
+    t "hop.sh tidy 修 sysctl / 失效链接 / docker-ce 源" bash -c "bash '$K/hop.sh' tidy; grep -q '^# EL7 only' /etc/sysctl.d/99-osup-smoke.conf && [ ! -L /etc/systemd/system/multi-user.target.wants/vdo.service ] && grep -q 'centos/\$releasever/' /etc/yum.repos.d/docker-ce.repo"
+    t "hop.sh tidy 幂等" bash -c "out=\$(bash '$K/hop.sh' tidy 2>&1); echo \"\$out\"; ! echo \"\$out\" | grep -qE 'may_detach|docker-ce.repo|启用链接'"
+    t "post-audit.sh tidy 之后不再报这些项" bash -c "POST_AUDIT_OFFLINE=1 bash '$K/post-audit.sh' > '$W/pa2.txt' 2>&1; ! grep -qE '^\[MEDIUM\] (sysctl 里有|.*失效的服务启用链接|启用的源写死)' '$W/pa2.txt'"
+  fi
+  if [ "$EL" -ge 9 ] && [ -f /etc/virc ]; then
+    cp -a /etc/virc /tmp/virc.orig; cp /etc/virc /etc/virc.rpmnew; printf '\nfiletype plugin on\n\n" content added by Leapp\nlet skip_defaults_vim=1\nset t_BE=\n' >> /etc/virc
+    t "post-audit.sh 标出 Leapp 改坏的 /etc/virc" bash -c "POST_AUDIT_OFFLINE=1 bash '$K/post-audit.sh' 2>/dev/null | grep -q '^\[HIGH\] /etc/virc'"
+    t "hop.sh tidy 把 /etc/virc 换回包自带版本" bash -c "bash '$K/hop.sh' tidy; [ \"\$(cksum < /etc/virc)\" = \"\$(cksum < /tmp/virc.orig)\" ] && [ ! -e /etc/virc.rpmnew ]"
+    cp /tmp/virc.orig /etc/virc.rpmnew; { cat /tmp/virc.orig; printf '" content added by Leapp\nlet skip_defaults_vim=1\nset mycustom\n'; } > /etc/virc
+    t "hop.sh tidy 不动有自定义内容的 /etc/virc" bash -c "bash '$K/hop.sh' tidy | grep -q '人工对比' && grep -q mycustom /etc/virc && [ -e /etc/virc.rpmnew ]"
+    cp -a /tmp/virc.orig /etc/virc; rm -f /etc/virc.rpmnew /tmp/virc.orig
+  fi
+  rm -f /etc/sysctl.d/99-osup-smoke.conf /etc/security/limits.d/99-osup-smoke.conf /etc/systemd/system/multi-user.target.wants/vdo.service
+  grep -q example.com /etc/yum.repos.d/docker-ce.repo 2>/dev/null && rm -f /etc/yum.repos.d/docker-ce.repo
 fi
 if [ "$(rpm -E %rhel 2>/dev/null)" = 7 ]; then
   t "prep-el7.sh usage on EL7"   bash -c "bash '$K/prep-el7.sh' | grep -q 'prep-el7.sh repos'"

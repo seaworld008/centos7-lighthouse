@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-19
+
+升级后集中体检的经验：约 38 台阿里云/华为云机器（17 台由本技能升级到 9.8/10.2），`verify.sh` 全绿但几天后才暴露的问题（报告：`field-reports/2026-11-19-fleet-post-upgrade-audit.md`）。
+
+### Added
+- `scripts/post-audit.sh`：升级完成后的只读体检，输出 HIGH/MEDIUM/INFO。覆盖 logrotate 没被调度和 `logrotate -d` 报错、Leapp 改坏的 `/etc/virc`（vi E319）、root 登录 shell 报错、旧版本包、leapp 残留、`dnf check`/源报错、写死旧版本号的源、内核与启动项、failed/反复 activating 的 unit、写在 `[Install]` 段的键、EL7 专用 sysctl、失效的服务启用链接、limits 写错、`sshd -t`/`visudo -c`/PAM 缺模块、NetworkManager/ifcfg/时间同步/`findmnt --verify`、本地程序和 failed unit 缺动态库、crond 日志与 root 邮件。`POST_AUDIT_OFFLINE=1` 不访问网络。（verified-on-real-run：11 台真实机器，结论与人工排查一致；container-smoke：四个镜像运行无 shell 报错）
+- `hop.sh tidy`：升级后的幂等小修，改动前备份到 `/root/os-upgrade-kit/tidy-backup`——启用 `logrotate.timer`（leapp 不对新增 unit 执行 preset，17/17 台升级机日志不再轮转）、注释 `fs.may_detach_mounts`（跳过链接文件）、virc 没有自定义内容时换回 `virc.rpmnew`、删除已知旧服务的失效启用链接、`docker-ce.repo` 写死的 `centos/<N>` 改回 `$releasever`。`hop.sh post` 末尾自动执行，并提示跑 `post-audit.sh`。（container-smoke：四个镜像的修复与幂等、virc 自定义内容不动；真实机器上同样的修复手工做过，`hop.sh tidy` 在 4 台已修好的机器上实测为 no-op）
+- `hop.sh prep`（目标 ≥9）：运行中的非 rpm 程序依赖 `libldap/liblber-2.4.so.2` 时把 `openldap-compat` 写进 leapp `to_install`（真实案例：云厂商数据库审计 agent）。（untested）
+- `pitfalls.md` 第 6 节：升级后的慢性问题（logrotate、virc E319、may_detach_mounts、limits 写错、失效链接、docker-ce 写死版本、libldap-2.4、`[Install]` 段的键、退回 9.8 后的 leapp 残留）；`recovery.md` F 第 7 步：退回旧版本后清理升级残留；云插件条目补充 cloudResetPwdUpdateAgent。SKILL 阶段 4 加 `post-audit.sh`。（verified-on-real-run）
+
+### Fixed
+- `hop.sh post`：写死旧版本号的源按 7…上一跳的所有版本号匹配（之前只看上一跳，某跳漏掉的源会一直留着）；处理源之前先修 `docker-ce.repo` 写死的版本号（同文件有 `$releasever` 段时原规则会跳过它）。（问题 verified-on-real-run；修复 container-smoke）
 ## [0.6.3] - 2026-11-13
 
 华为云生产 Jenkins 发布机升级到 10.2 的经验（报告：`field-reports/2026-11-13-huawei-prod-jenkins-tomcat.md`）。
